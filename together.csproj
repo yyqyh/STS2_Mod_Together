@@ -1,0 +1,84 @@
+<Project Sdk="Godot.NET.Sdk/4.5.1">
+    <!--本地化引用-->
+    <Import Project=".\local.props" Condition="Exists('.\local.props')" />
+    <Import Project=".\Sts2PathDiscovery.props" Condition="Exists('.\Sts2PathDiscovery.props')" />
+    <Target Name="EnsureLocalProps" BeforeTargets="PrepareForBuild" Condition="!Exists('.\local.props')">
+        <Error Text="Missing '.\local.props'. Copy '.\local.props.template' to '.\local.props', then update 'Sts2Dir' / 'GodotExe' for your local environment." />
+    </Target>
+
+    <!--项目基础设置-->
+    <PropertyGroup>
+        <RootNamespace>Together</RootNamespace>
+        <!-- 程序集名必须与清单 id、PCK 名一致：ModManager 按 {id}.dll / {id}.pck 找文件 -->
+        <AssemblyName>together</AssemblyName>
+        <TargetFramework>net9.0</TargetFramework>
+        <TargetFramework Condition=" '$(GodotTargetPlatform)' == 'android' ">net9.0</TargetFramework>
+
+        <ImplicitUsings>true</ImplicitUsings>
+        <Nullable>enable</Nullable>
+        <EnableDynamicLoading>true</EnableDynamicLoading>
+        <NoWarn>CS0436</NoWarn>
+    </PropertyGroup>
+
+    <!--mod文件输出预设-->
+    <PropertyGroup>
+        <GodotExportPreset>BasicExport</GodotExportPreset>
+        <ModOutputDir>$(Sts2Dir)\mods\$(MSBuildProjectName)\</ModOutputDir>
+        <ModOutputDir Condition="'$(IsOSX)' == 'true'">$(Sts2Dir)\MacOS\mods\$(MSBuildProjectName)\</ModOutputDir>
+        <ModPckPath>$(ModOutputDir)$(MSBuildProjectName).pck</ModPckPath>
+    </PropertyGroup>
+    <PropertyGroup>
+        <!-- 必须导出 PCK：本地化 JSON（以及将来的图片/场景）都活在 Godot 工程里，
+             游戏只能通过 PCK 看到它们。关掉就会变成"改了 JSON 但运行期不生效"这种最难查的问题。
+             确实只想快速编译时：dotnet build -p:RunPckExport=false -->
+        <RunPckExport Condition="'$(RunPckExport)' == ''">true</RunPckExport>
+    </PropertyGroup>
+
+    <!--引用设置-->
+    <ItemGroup>
+        <Reference Include="0Harmony">
+            <HintPath>$(Sts2DataDir)\0Harmony.dll</HintPath>
+            <Private>false</Private>
+        </Reference>
+        <Reference Include="GodotSharp">
+            <HintPath>$(Sts2DataDir)\GodotSharp.dll</HintPath>
+            <Private>false</Private>
+        </Reference>
+        <Reference Include="sts2">
+            <HintPath>$(Sts2DataDir)\sts2.dll</HintPath>
+            <Private>false</Private>
+        </Reference>
+        <PackageReference Include="STS2.RitsuLib" Version="0.5.18" />
+    </ItemGroup>
+
+    <!--拷贝至游戏mods文件夹便于测试-->
+    <Target Name="Copy Mod" AfterTargets="PostBuildEvent">
+        <Message Text="Copying mod to Slay the Spire 2 mods folder..." Importance="high" />
+        <MakeDir Directories="$(ModOutputDir)" />
+        <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(ModOutputDir)" />
+        <Copy SourceFiles="$(MSBuildProjectDirectory)\$(MSBuildProjectName).json" DestinationFolder="$(ModOutputDir)" />
+    </Target>
+
+    <!--直接调用Godot打包出Pck进mod文件夹-->
+    <Target Name="Export Mod PCK" AfterTargets="Build" Condition="'$(RunPckExport)' == 'true' and '$(STS2_SKIP_PCK_EXPORT)' != '1' and Exists('$(GodotExe)')">
+        <Message Text="Exporting mod PCK with MegaDot..." Importance="high" />
+        <MakeDir Directories="$(ModOutputDir)" />
+        <Exec Command="&quot;$(GodotExe)&quot; --headless --path &quot;$(MSBuildProjectDirectory)&quot; --export-pack &quot;$(GodotExportPreset)&quot; &quot;$(ModPckPath)&quot;" EnvironmentVariables="STS2_SKIP_PCK_EXPORT=1" />
+    </Target>
+    <Target Name="Warn Missing Godot" AfterTargets="Build" Condition="'$(RunPckExport)' == 'true' and '$(STS2_SKIP_PCK_EXPORT)' != '1' and !Exists('$(GodotExe)')">
+        <Warning Text="Godot executable not found at $(GodotExe). Skipped PCK export." />
+    </Target>
+
+    <!--包含文件-->
+    <ItemGroup>
+        <Compile Remove=".godot\**" />
+        <None Remove=".godot\**" />
+        <Content Remove=".godot\**" />
+        <EmbeddedResource Remove=".godot\**" />
+        <!-- 内容根目录（res://together）只作为 Godot 资源，不参与 .NET 内容拷贝 -->
+        <Content Remove="together\**" />
+    </ItemGroup>
+    <ItemGroup>
+        <Content Include="together.json" />
+    </ItemGroup>
+</Project>
