@@ -77,6 +77,28 @@ public sealed class TogetherSettings
     public bool ShareGold { get; set; } = true;
 
     /// <summary>
+    /// 是否把原版事件改成"共享事件"（两人投票，票高的选项对所有人执行）。
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>为什么需要这个开关</b>：联机时每个玩家各有一份事件实例（本体 <c>EventModel.IsShared=false</c> 时
+    /// "players may choose options independently"），而共生体<b>共用一副卡组</b>。于是两个人可能同时对同一张牌
+    /// 做"附魔 / 移除 / 升级"：后手会撞上"这张牌已经附魔过"而抛异常（附魔不可叠加），
+    /// 又因为异常抛在事件结束之前，事件会卡住、房间出不去。
+    /// </para>
+    /// <para>
+    /// 开启后事件只有一个选择（投票），从根上没有这个冲突。
+    /// <b>代价</b>：① 事件奖励由"每人一份"变成"整组一份"；
+    /// ② <c>IsDeterministic =&gt; !IsShared</c>，所以共享事件结束时<b>不再发校验和</b>（少一次不同步检查）。
+    /// </para>
+    /// <para>
+    /// 不开也能用：本 mod 会在共享卡组变化时刷新另一个人的选牌界面，并在应用前拦掉已经失效的选择
+    /// （不崩、不卡房，见 <c>Core/Patches/Together/EventFlowPatches.cs</c>）。
+    /// </para>
+    /// </remarks>
+    public bool ShareEvents { get; set; }
+
+    /// <summary>
     /// 共生体存档登记：<c>种子 → 成员 netId（逗号分隔）</c>。
     /// </summary>
     /// <remarks>

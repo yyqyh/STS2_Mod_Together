@@ -58,6 +58,19 @@ internal static class TogetherSettingsStore
         }
     }
 
+    /// <summary>本机设置里的"事件是否改成共享事件（两人投票）"。</summary>
+    /// <remarks>同 <see cref="SymbiosisEnabled" />：功能上请读同步层。</remarks>
+    public static bool ShareEvents
+    {
+        get
+        {
+            Initialize();
+
+            var settings = RitsuLibFramework.GetDataStore(Const.ModId).Get<TogetherSettings>(DataKey);
+            return settings is not null && settings.ShareEvents;
+        }
+    }
+
     /// <summary>本机设置里的"血量上限提升百分比"（已夹到 0~100）。</summary>
     public static int HpBonusPercent
     {

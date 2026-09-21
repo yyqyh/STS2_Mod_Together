@@ -114,6 +114,17 @@ internal static class TogetherModSettingsPage
                 TogetherSettingsSync.PublishHostSettings("settings_changed");
             });
 
+        var shareEventsBinding = new ModSettingsValueBinding<TogetherSettings, bool>(
+            Const.ModId,
+            TogetherSettingsStore.DataKey,
+            SaveScope.Global,
+            _ => TogetherSettingsSync.EffectiveShareEvents,
+            (settings, value) =>
+            {
+                settings.ShareEvents = value;
+                TogetherSettingsSync.PublishHostSettings("settings_changed");
+            });
+
         RitsuLibFramework.RegisterModSettings(Const.ModId, page => page
             .WithTitle(ModSettingsText.Literal("Together · 共生体"))
             .WithModDisplayName(ModSettingsText.Literal("Together"))
@@ -167,6 +178,18 @@ internal static class TogetherModSettingsPage
                         + "开局把所有人的起始金币【加起来】当共同余额（99 × 人数；只在开新局时加一次，"
                         + "读档/重连不会重复加）；关闭时各花各的。\n"
                         + "联机时以主机设置为准。"))
+                .AddToggle(
+                    "share_events",
+                    ModSettingsText.Literal("事件改为共享（两人投票，只有一次选择）"),
+                    shareEventsBinding,
+                    ModSettingsText.Literal(
+                        "背景：联机时每个玩家各有一份事件实例，而共生体共用一副卡组——两个人可能同时对同一张牌"
+                        + "选「附魔 / 移除 / 升级」，后手会撞上「这张牌已经附魔过」而抛异常，事件卡住出不去。\n"
+                        + "开启：所有原版事件按「共享事件」处理 —— 两人投票，票高的选项对所有人执行，只有一个选择，"
+                        + "从根上没有冲突。\n"
+                        + "代价：事件奖励由「每人一份」变成「整组一份」；共享事件结束时不再发校验和（少一次不同步检查）。\n"
+                        + "不开也能用：默认行为会在共享卡组被改动时刷新另一个人的选牌界面，并在应用前拦掉失效的选择"
+                        + "（不崩、不卡房）。"))
                 .AddParagraph(
                     "how_it_works",
                     ModSettingsText.Literal(
