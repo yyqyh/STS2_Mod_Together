@@ -1,18 +1,15 @@
 using System.Reflection;
 
 using HarmonyLib;
-
 using MegaCrit.Sts2.Core.Logging;
 using MegaCrit.Sts2.Core.Modding;
-
-using STS2RitsuLib;
 using STS2RitsuLib.Interop;
+using STS2RitsuLib;
+using Together.Core.Content;
+using Together.Core.Settings;
 
-using Together.Core.Config;
-using Together.Core.Multiplayer;
+namespace Together;
 
-namespace Together
-{
     /// <summary>
     /// Mod 入口。
     /// </summary>
@@ -109,4 +106,3 @@ namespace Together
             // 必要补丁无法应用时，在这里关闭你自己的 Mod。
         }
     }
-}
