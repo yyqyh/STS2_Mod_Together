@@ -12,52 +12,18 @@ using Together.Core.Combat;
 
 namespace Together.Core.Patches.Deck;
 
-// ======================================================================
-// 合并自 Core/Multiplayer/PileCountSyncPatch.cs（2026-09-21 合并文件，正文未改动）
-// ======================================================================
 /// <summary>
-/// 牌堆计数 UI 的即时同步：把按钮上的数字按**真实张数**写死，不再靠事件累加。
+/// 牌堆计数 UI 的即时同步：把按钮上的数字按<b>真实张数</b>写死，不再靠事件累加。
 /// </summary>
 /// <remarks>
-/// <para>
-/// <b>症状</b>：战斗里抽牌堆/弃牌堆按钮上的数字"不即时"，有时干脆一直差几张。
-/// </para>
-/// <para>
-/// <b>原因</b>：本体的计数不是读数据算出来的，而是"事件 + 每次 ±1"：
-/// <c>CardPile.CardAddFinished</c> / <c>CardRemoveFinished</c> →
-/// <c>NCombatCardPile.AddCard/RemoveCard</c> → <c>Math.Min(_currentCount + 1, _pile.Cards.Count)</c>。
-/// 这套东西在共享牌堆下有<b>两处必然漏事件</b>：
-/// </para>
-/// <list type="number">
-/// <item><description>
-/// <b>别人的牌不播动画</b>：<c>CardPileCmd.GetTweenForCardsChangingPiles</c> 里有一句
-/// <c>LocalContext.IsMe(card.Owner)</c>，不是本地玩家的牌直接 <c>continue</c>，
-/// 于是"牌落进堆"那一次 <c>InvokeCardAddFinished</c> 永远不发。共享堆里绝大多数牌都属于锚点，
-/// 所以回声那一侧的计数基本不刷新（这也解释了为什么"p1 看着正常、p2 不对"）。
-/// </description></item>
-/// <item><description>
-/// <b>静默搬运不发任何事件</b>：<see cref="CardOwnershipImpl.NormalizeForHand" /> 必须
-/// "先静默摘牌、再改 owner"（顺序反了会因为按 owner 反查堆而摘不掉），
-/// 于是抽牌时"抽牌堆少一张"连 <c>RemoveFinished</c> 都不会发。
-/// </description></item>
-/// </list>
-/// <para>
-/// 而累加式写法（<c>Min(当前+1, 真实)</c> / <c>Max(当前-1, 真实)</c>）即使收到事件也只向真实值挪一格，
-/// 所以一旦漏事件就再也追不回来。
-/// </para>
-/// <para>
-/// <b>解法</b>：挂点选在<b>数据层</b>（<c>CardPile.AddInternal</c> / <c>RemoveInternal</c> 的 Postfix），
-/// 把标签直接写成 <c>pile.Cards.Count</c>。这两处无论静默与否、无论牌属于谁都会走到，
-/// 而且两端执行顺序一致。本体原来的 ±1 钩子留着不动——它们只会把值夹回真实值，不会再改坏。
-/// </para>
-/// <para>
-/// 顶栏的卡组按钮订阅的是同样那两个事件，同样是"漏事件就不刷新"，
-/// 所以也一起挂上（它自己那个 <c>OnPileContentsChanged</c> 本来就会读真实张数，直接触发它即可）。
-/// </para>
-/// <para>
-/// 反射读的都是本体的私有字段（<c>_pile</c> / <c>_countLabel</c> / <c>_currentCount</c>）。
-/// 读不到时只警告一次并<b>安静地不干活</b>——绝不能让"计数 UI 没修好"升级成"整个 mod 挂掉"。
-/// </para>
+/// 本体是"事件 + 每次 ±1"（<c>Math.Min(_currentCount + 1, _pile.Cards.Count)</c>），共享牌堆下有<b>两处必然漏事件</b>：
+/// ① 别人的牌不播动画（<c>GetTweenForCardsChangingPiles</c> 里非本地玩家的牌直接 continue）→ 回声那侧的计数基本不刷新；
+/// ② 静默搬运不发任何事件（归属规整必须先静默摘牌再改 owner）。
+/// 漏一次就再也追不回来，所以改挂在<b>数据层</b>：<c>CardPile.AddInternal / RemoveInternal</c> 这两处无论静默与否、
+/// 无论牌属于谁都会走到，两端顺序也一致；本体原来的 ±1 钩子留着不动（只会把值夹回真实值）。
+/// 顶栏卡组按钮订阅同样那两个事件，所以也一起挂（它自己的 <c>OnPileContentsChanged</c> 本来就读真实张数）。
+/// 反射读的是本体私有字段（<c>_pile</c> / <c>_countLabel</c> / <c>_currentCount</c>），读不到时只警告一次并安静地不干活
+/// —— 不能让"计数 UI 没修好"升级成"整个 mod 挂掉"。
 /// </remarks>
 internal static class PileCountSync
 {
@@ -71,14 +37,9 @@ internal static class PileCountSync
     private static readonly List<Entry> Entries = [];
 
     /// <summary>
-    /// 字段缓存。
+    /// 字段缓存。键必须带<b>字段名</b>：同一类型上要读三个字段，只用类型当键会拿回上一个 <c>FieldInfo</c>
+    /// （实测报 <c>Object of type 'System.Int32' cannot be converted to type 'CardPile'</c>，整条刷新静默失效）。
     /// </summary>
-    /// <remarks>
-    /// 键必须带上<b>字段名</b>：同一个类型上我们要读 <c>_pile</c> / <c>_countLabel</c> / <c>_currentCount</c>
-    /// 三个字段，只用类型当键的话第二次查就会拿回上一次的 <c>FieldInfo</c>——
-    /// 实测报错就是 <c>Object of type 'System.Int32' cannot be converted to type 'CardPile'</c>
-    /// （把张数写进了 <c>_pile</c> 字段），整条即时刷新静默失效。
-    /// </remarks>
     private static readonly Dictionary<(Type Type, string Name), FieldInfo?> FieldCache = [];
 
     private static readonly Dictionary<(Type Type, string Name), MethodInfo?> MethodCache = [];
@@ -294,10 +255,16 @@ internal static class PileCountSync
     }
 }
 
-/// <summary>入堆（含 <c>silent: true</c> 的静默入堆）之后，把计数写成真实张数。</summary>
-[HarmonyPatch(typeof(CardPile), nameof(CardPile.AddInternal))]
-internal static class PileCountAddSyncPatch
+/// <summary>入堆 / 出堆（含 <c>silent: true</c> 的静默搬运，抽牌走的就是出堆）之后，把计数写成真实张数。</summary>
+[HarmonyPatch]
+internal static class PileCountSyncOnChangePatch
 {
+    private static IEnumerable<MethodBase> TargetMethods()
+    {
+        yield return AccessTools.Method(typeof(CardPile), nameof(CardPile.AddInternal));
+        yield return AccessTools.Method(typeof(CardPile), nameof(CardPile.RemoveInternal));
+    }
+
     [HarmonyPostfix]
     private static void Postfix(CardPile __instance)
     {
@@ -305,93 +272,73 @@ internal static class PileCountAddSyncPatch
     }
 }
 
-/// <summary>出堆（含静默出堆，抽牌走的就是这条）之后，把计数写成真实张数。</summary>
-[HarmonyPatch(typeof(CardPile), nameof(CardPile.RemoveInternal))]
-internal static class PileCountRemoveSyncPatch
-{
-    [HarmonyPostfix]
-    private static void Postfix(CardPile __instance)
-    {
-        PileCountSync.SyncPile(__instance);
-    }
-}
-
-/// <summary>战斗牌堆按钮登记（顺手对齐一次初始张数）。</summary>
+/// <summary>
+/// 登记两种"显示某口牌堆"的 UI：战斗牌堆按钮 + 顶栏卡组按钮（顺手对齐一次初始张数）。
+/// </summary>
 /// <remarks>
-/// 挂在含虚方法 <c>Initialize</c> 的基类上：<c>NExhaustPileButton</c> 的覆写会调用 <c>base.Initialize</c>，
+/// 战斗牌堆按钮挂在含虚方法 <c>Initialize</c> 的基类上：<c>NExhaustPileButton</c> 的覆写会调用 <c>base.Initialize</c>，
 /// 所以三种按钮都会被登记到。
 /// </remarks>
-[HarmonyPatch(typeof(NCombatCardPile), nameof(NCombatCardPile.Initialize))]
+[HarmonyPatch]
 internal static class PileCountBindPatch
 {
-    [HarmonyPostfix]
-    private static void Postfix(NCombatCardPile __instance)
+    private static IEnumerable<MethodBase> TargetMethods()
     {
-        PileCountSync.Bind(__instance, typeof(NCombatCardPile), PileCountSync.WriteCountLabel);
+        yield return AccessTools.Method(typeof(NCombatCardPile), nameof(NCombatCardPile.Initialize));
+        yield return AccessTools.Method(typeof(NTopBarDeckButton), nameof(NTopBarDeckButton.Initialize));
     }
-}
-
-/// <summary>战斗牌堆按钮出场景树时注销。</summary>
-[HarmonyPatch(typeof(NCombatCardPile), nameof(NCombatCardPile._ExitTree))]
-internal static class PileCountUnbindPatch
-{
-    [HarmonyPostfix]
-    private static void Postfix(NCombatCardPile __instance)
-    {
-        PileCountSync.Unbind(__instance);
-    }
-}
-
-/// <summary>顶栏卡组按钮登记。</summary>
-[HarmonyPatch(typeof(NTopBarDeckButton), nameof(NTopBarDeckButton.Initialize))]
-internal static class DeckCountBindPatch
-{
-    [HarmonyPostfix]
-    private static void Postfix(NTopBarDeckButton __instance)
-    {
-        PileCountSync.Bind(__instance, typeof(NTopBarDeckButton), PileCountSync.RefreshDeckButton);
-    }
-}
-
-/// <summary>顶栏卡组按钮销毁时注销（本体就是在这个通知里退订自己的事件的）。</summary>
-[HarmonyPatch(typeof(NTopBarDeckButton), nameof(NTopBarDeckButton._Notification))]
-internal static class DeckCountUnbindPatch
-{
-    /// <summary>Godot 的 <c>NOTIFICATION_PREDELETE</c>。</summary>
-    private const int PredeleteNotification = 1;
 
     [HarmonyPostfix]
-    private static void Postfix(NTopBarDeckButton __instance, int __0)
+    private static void Postfix(object __instance)
     {
-        if (__0 == PredeleteNotification)
+        switch (__instance)
         {
-            PileCountSync.Unbind(__instance);
+            case NCombatCardPile pile:
+                PileCountSync.Bind(pile, typeof(NCombatCardPile), PileCountSync.WriteCountLabel);
+                break;
+
+            case NTopBarDeckButton deck:
+                PileCountSync.Bind(deck, typeof(NTopBarDeckButton), PileCountSync.RefreshDeckButton);
+                break;
         }
     }
 }
 
-// ======================================================================
-// 合并自 Core/Multiplayer/CardPileLookupPatch.cs（2026-09-21 合并文件，正文未改动）
-// ======================================================================
+/// <summary>UI 离开场景树 / 被销毁时注销（顶栏卡组按钮本体就是在 PREDELETE 通知里退订自己事件的）。</summary>
+[HarmonyPatch]
+internal static class PileCountUnbindPatch
+{
+    /// <summary>Godot 的 <c>NOTIFICATION_PREDELETE</c>。</summary>
+    private const int PredeleteNotification = 1;
+
+    private static IEnumerable<MethodBase> TargetMethods()
+    {
+        yield return AccessTools.Method(typeof(NCombatCardPile), nameof(NCombatCardPile._ExitTree));
+        yield return AccessTools.Method(typeof(NTopBarDeckButton), nameof(NTopBarDeckButton._Notification));
+    }
+
+    [HarmonyPostfix]
+    private static void Postfix(object __instance, object[] __args)
+    {
+        // 顶栏卡组按钮每次通知都会被调到，只在"即将销毁"那条里注销。
+        if (__instance is NTopBarDeckButton && (__args.Length == 0 || (int)__args[0] != PredeleteNotification))
+        {
+            return;
+        }
+
+        PileCountSync.Unbind(__instance);
+    }
+}
+
 /// <summary>
 /// 让 <c>CardModel.Pile</c> 在配对局里也能找到"借住"在另一半堆里的自己。
 /// </summary>
 /// <remarks>
-/// <para>
-/// 本体的实现是：<c>Pile =&gt; _owner?.Piles.FirstOrDefault(p =&gt; p.Cards.Contains(this))</c> ——
-/// 只在<b>卡牌自己 owner</b> 的堆集合里找自己。
-/// </para>
-/// <para>
-/// 共享牌库打破了这条隐含约定：为了通过本体批量 <c>CardPileCmd.Add</c> 的
-/// "同批 owner 必须一致"校验（洗牌走这条路，否则回合循环会死），
-/// 我们把离开手牌的牌统一归到锚点名下。于是 <c>Owner</c> 不再能唯一决定"牌在哪个堆里"，
-/// 而依赖 owner 反查堆的代码（<c>RemoveFromCurrentPile</c>、<c>NPlayerHand.GetHandInsertIndex</c> 等）
-/// 就会认错堆 —— 表现就是"幽灵卡牌 / 牌同时留在两处 / 计数不刷新"。
-/// </para>
-/// <para>
-/// 这里只做一件事：原查找失败时，再去另一半的堆里找一遍。
-/// 找到了就说明这张牌"借住"在对方的共享堆里（共享堆本来两边都指向同一实例）。
-/// </para>
+/// 本体是 <c>Pile =&gt; _owner?.Piles.FirstOrDefault(p =&gt; p.Cards.Contains(this))</c>，只在<b>卡牌自己 owner</b>
+/// 的堆集合里找自己。共享牌库打破了这条隐含约定：为了过本体批量 <c>CardPileCmd.Add</c> 的"同批 owner 必须一致"
+/// 校验（洗牌走这条路，否则回合循环会死），离开手牌的牌被统一归到锚点名下 → 依赖 owner 反查堆的代码
+/// （<c>RemoveFromCurrentPile</c>、<c>NPlayerHand.GetHandInsertIndex</c> 等）会认错堆，表现就是
+/// "幽灵卡牌 / 牌同时留在两处 / 计数不刷新"。这里只做一件事：原查找失败时再去另一半的堆里找一遍。
 /// </remarks>
 [HarmonyPatch(typeof(CardModel), "get_Pile")]
 internal static class CardPileLookupPatch

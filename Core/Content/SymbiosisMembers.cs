@@ -170,15 +170,6 @@ internal static class SymbiosisMembers
         }
     }
 
-    /// <summary>这位玩家还能不能确定（已经在名额里、或者还有空名额）。</summary>
-    public static bool HasFreeSeat(ulong playerId)
-    {
-        lock (Gate)
-        {
-            return Local.Contains(Key(playerId)) || Local.Count < Capacity;
-        }
-    }
-
     public static ulong[] Snapshot()
     {
         lock (Gate)

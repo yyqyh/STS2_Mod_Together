@@ -4,7 +4,7 @@
   "name": "Together",
   "author": "b4c",
   "description": "双人联机专用角色：两名玩家共同操作同一个角色——共享血量与状态、共享卡组与抽弃牌堆，各自持有手牌与能量。需要双方同时选择该角色。",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "has_pck": true,
   "has_dll": true,
   "affects_gameplay": true,

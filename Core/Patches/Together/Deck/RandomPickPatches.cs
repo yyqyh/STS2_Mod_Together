@@ -1,3 +1,5 @@
+using System.Reflection;
+
 using HarmonyLib;
 
 using MegaCrit.Sts2.Core.Commands;
@@ -14,32 +16,21 @@ using Together.Core.Utils;
 namespace Together.Core.Patches.Deck;
 
 /// <summary>
-/// "取牌"这件事的确定性：<b>挂本体自己的公共入口，不认具体是哪张牌</b>。
+/// "取牌"的确定性：<b>挂本体公共入口，不认具体是哪张牌</b>。
 /// </summary>
 /// <remarks>
-/// <para>
-/// 背景：所有"打出随机牌 / 随机拿牌"的效果都是"读某个牌堆 → 随机（或取堆顶）挑一张"，
-/// 结果取决于<b>那个牌堆当下的顺序</b>，而共生体两端的堆顺序会因为本地时序漂掉。
-/// 以前的做法是逐张牌挂（横祸一条、破灭一条…），每出一张新牌就得补一条，太脆。
-/// </para>
-/// <para>
-/// 现在按"牌调用的本体 API"分四类覆盖，新牌只要用的是同一批 API 就自动生效：
-/// </para>
 /// <list type="number">
-/// <item><description><b>弃牌堆 / 主卡组</b>：挂 <c>CardPile.AddInternal</c>（以及 MoveToTop/Bottom），
-/// 每次变动后保持规范序 → 任何"从这两口堆随机取"的效果（现在和将来的牌、能力、遗物）自动覆盖。
-/// 这两口堆的顺序在玩法上没有语义（全库没有任何"取弃牌堆顶 / 卡组第 N 张"的读法），所以可以一直保持规范序。</description></item>
-/// <item><description><b>打出抽牌堆</b>：挂 <c>CardPileCmd.AutoPlayFromDrawPile</c> → 破灭 / 倾泻 / 无敌 / 混沌蒸馏药水 / 混乱之力这一族全覆盖。</description></item>
+/// <item><description><b>弃牌堆 / 主卡组</b>：挂 <c>CardPile.AddInternal</c>（含 MoveToTop/Bottom），每次变动后保持规范序。
+/// 这两口堆的顺序在玩法上没有语义（全库没有"取弃牌堆顶 / 卡组第 N 张"的读法），所以可以一直保持规范序。</description></item>
+/// <item><description><b>打出抽牌堆</b>：挂 <c>CardPileCmd.AutoPlayFromDrawPile</c>（破灭 / 倾泻 / 无敌 / 混沌蒸馏药水…）。</description></item>
 /// <item><description><b>StableShuffle 取牌</b>：靠 <c>DeterministicCardComparePatch</c> 把 <c>CardModel.CompareTo</c> 变成全序
-/// （<c>StableShuffle</c> 内部先 <c>List.Sort()</c>）→ 横祸 / 乱战 / 寻者之击 / 能量电池 / 碎石机这一族自动覆盖，不需要单独挂。</description></item>
-/// <item><description><b>候选池</b>：挂 <c>CardFactory.GetDistinctForCombat</c> → 攻击药水 / 发现这类"生成随机候选"全覆盖。</description></item>
+/// （横祸 / 乱战 / 寻者之击 / 能量电池…），不需要单独挂。</description></item>
+/// <item><description><b>候选池</b>：挂 <c>CardFactory.GetDistinctForCombat</c>（攻击药水 / 发现一类）。</description></item>
 /// </list>
 /// <para>
-/// <b>唯一的例外</b>：<c>TakeRandom</c>（内部是 <c>UnstableShuffle</c>，输入顺序敏感）直接读<b>抽牌堆</b>的写法。
-/// 抽牌堆不能像弃牌堆那样一直排成规范序——本体"抽牌"就是取 <c>Cards[0]</c>（<c>CardPileCmd.Draw</c>），
-/// 排了就变成"永远按固定顺序抽牌"，洗牌就没意义了。全库目前只有受膏（<c>ANOINTED</c>）这么写，
-/// 所以只给它单独挂一条（见文件末尾 <c>AnointedOrderPatch</c>）。
-/// 以后新增牌如果也是这种写法（<c>TakeRandom</c> + 抽牌堆），grep 一下 <c>TakeRandom(</c> 加一条即可。
+/// <b>唯一例外</b>：<c>TakeRandom</c>（内部 UnstableShuffle）直接读<b>抽牌堆</b>的写法。抽牌堆不能保持规范序
+/// （本体抽牌就是取 <c>Cards[0]</c>，排了就变成永远按固定顺序抽牌）。全库目前只有受膏一张，见文件末尾；
+/// 以后新增这种写法（<c>TakeRandom</c> + 抽牌堆）grep 一下 <c>TakeRandom(</c> 再加一条。
 /// </para>
 /// </remarks>
 internal static class RandomPickOrder
@@ -93,36 +84,21 @@ internal static class RandomPickOrder
 // 1) 弃牌堆 / 主卡组：只要堆变了就归一顺序（覆盖所有"从这两口堆随机取"的效果）
 // ======================================================================================
 
-/// <summary>加牌之后归一顺序（弃牌堆 / 主卡组）。</summary>
-[HarmonyPatch(typeof(CardPile), nameof(CardPile.AddInternal))]
-internal static class PileOrderNormalizeOnAddPatch
+/// <summary>堆变动（加牌 / 移到堆顶 / 移到堆底）之后归一顺序。</summary>
+[HarmonyPatch]
+internal static class PileOrderNormalizePatch
 {
-    [HarmonyPostfix]
-    private static void Postfix(CardPile __instance, CardModel card)
+    private static IEnumerable<MethodBase> TargetMethods()
     {
-        RandomPickOrder.NormalizeOrderFreePile(__instance, card.Owner, "加牌");
+        yield return AccessTools.Method(typeof(CardPile), nameof(CardPile.AddInternal));
+        yield return AccessTools.Method(typeof(CardPile), nameof(CardPile.MoveToTopInternal));
+        yield return AccessTools.Method(typeof(CardPile), nameof(CardPile.MoveToBottomInternal));
     }
-}
 
-/// <summary>把牌移到堆顶之后归一顺序。</summary>
-[HarmonyPatch(typeof(CardPile), nameof(CardPile.MoveToTopInternal))]
-internal static class PileOrderNormalizeOnMoveTopPatch
-{
     [HarmonyPostfix]
-    private static void Postfix(CardPile __instance, CardModel card)
+    private static void Postfix(CardPile __instance, CardModel card, MethodBase __originalMethod)
     {
-        RandomPickOrder.NormalizeOrderFreePile(__instance, card.Owner, "移到堆顶");
-    }
-}
-
-/// <summary>把牌移到堆底之后归一顺序。</summary>
-[HarmonyPatch(typeof(CardPile), nameof(CardPile.MoveToBottomInternal))]
-internal static class PileOrderNormalizeOnMoveBottomPatch
-{
-    [HarmonyPostfix]
-    private static void Postfix(CardPile __instance, CardModel card)
-    {
-        RandomPickOrder.NormalizeOrderFreePile(__instance, card.Owner, "移到堆底");
+        RandomPickOrder.NormalizeOrderFreePile(__instance, card.Owner, __originalMethod.Name);
     }
 }
 

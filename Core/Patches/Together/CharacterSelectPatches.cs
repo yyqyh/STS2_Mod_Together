@@ -1,3 +1,5 @@
+using System.Reflection;
+
 using Godot;
 using HarmonyLib;
 using MegaCrit.Sts2.Core.Nodes.CommonUi;
@@ -8,13 +10,7 @@ using Together.Core.Utils;
 
 namespace Together.Core.Patches;
 
-/// <summary>
-/// 选人界面的共生体逻辑（按钮 + 起程门控），共享实现放在这里，补丁类接在文件末尾。
-/// </summary>
-/// <remarks>
-/// <b>补丁一律写成类级 <c>[HarmonyPatch]</c></b>：实测方法级 <c>[HarmonyPatch]</c>
-/// 在这个 Harmony 构建下不会被识别（日志出现 <c>Harmony patched 0 method(s)</c>，门控静默失效）。
-/// </remarks>
+/// <summary>选人界面的共生体逻辑（按钮 + 起程门控），补丁接在文件末尾。</summary>
 internal static class CharacterSelectGateImpl
 {
     /// <summary>当前打开的角色选择界面（屏幕自己在 OnSubmenuOpened 时登记）。</summary>
@@ -240,48 +236,38 @@ internal static class CharacterSelectGateImpl
     }
 }
 
-/// <summary>登记界面 + 装「共生体」按钮。</summary>
-[HarmonyPatch(typeof(NCharacterSelectScreen), "OnSubmenuOpened")]
-internal static class CharacterSelectOpenedPatch
+/// <summary>
+/// 选人界面：打开时登记界面 + 装「共生体」按钮，关闭时收掉自己加的节点，
+/// 换人（本地点选 / 队友改选）后刷新按钮与起程按钮。
+/// </summary>
+[HarmonyPatch]
+internal static class CharacterSelectPatches
 {
-    [HarmonyPostfix]
-    private static void Postfix(NCharacterSelectScreen __instance)
+    private static IEnumerable<MethodBase> TargetMethods()
     {
-        CharacterSelectGateImpl.OnOpened(__instance);
+        yield return AccessTools.Method(typeof(NCharacterSelectScreen), "OnSubmenuOpened");
+        yield return AccessTools.Method(typeof(NCharacterSelectScreen), "OnSubmenuClosed");
+        yield return AccessTools.Method(typeof(NCharacterSelectScreen), nameof(NCharacterSelectScreen.SelectCharacter));
+        yield return AccessTools.Method(typeof(NCharacterSelectScreen), nameof(NCharacterSelectScreen.PlayerChanged));
     }
-}
 
-/// <summary>界面关闭时收掉自己加的节点。</summary>
-[HarmonyPatch(typeof(NCharacterSelectScreen), "OnSubmenuClosed")]
-internal static class CharacterSelectClosedPatch
-{
     [HarmonyPostfix]
-    private static void Postfix(NCharacterSelectScreen __instance)
+    private static void Postfix(NCharacterSelectScreen __instance, MethodBase __originalMethod)
     {
-        CharacterSelectGateImpl.OnClosed(__instance);
-    }
-}
+        switch (__originalMethod.Name)
+        {
+            case "OnSubmenuOpened":
+                CharacterSelectGateImpl.OnOpened(__instance);
+                break;
 
-/// <summary>点选任意角色后刷新按钮与起程按钮。</summary>
-[HarmonyPatch(typeof(NCharacterSelectScreen), nameof(NCharacterSelectScreen.SelectCharacter))]
-internal static class CharacterSelectSelectPatch
-{
-    [HarmonyPostfix]
-    private static void Postfix(NCharacterSelectScreen __instance)
-    {
-        CharacterSelectGateImpl.Refresh(__instance);
-        CharacterSelectGateImpl.RefreshEmbark(__instance);
-    }
-}
+            case "OnSubmenuClosed":
+                CharacterSelectGateImpl.OnClosed(__instance);
+                break;
 
-/// <summary>队友改选后同样刷新（远端变化只会走到这里）。</summary>
-[HarmonyPatch(typeof(NCharacterSelectScreen), nameof(NCharacterSelectScreen.PlayerChanged))]
-internal static class CharacterSelectPlayerChangedPatch
-{
-    [HarmonyPostfix]
-    private static void Postfix(NCharacterSelectScreen __instance)
-    {
-        CharacterSelectGateImpl.Refresh(__instance);
-        CharacterSelectGateImpl.RefreshEmbark(__instance);
+            default:
+                CharacterSelectGateImpl.Refresh(__instance);
+                CharacterSelectGateImpl.RefreshEmbark(__instance);
+                break;
+        }
     }
 }

@@ -100,9 +100,4 @@ namespace Together;
 
             return string.Join("  ←  ", parts);
         }
-
-        private static void DisableMod()
-        {
-            // 必要补丁无法应用时，在这里关闭你自己的 Mod。
-        }
     }

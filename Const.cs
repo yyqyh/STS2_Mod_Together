@@ -88,8 +88,4 @@ public static class Const
         public const string CharacterRoot = ImagesRoot + "/character";
     }
 
-    /// <summary>音频路径（暂时为空，接入 FMOD 事件时在这里加常量）。</summary>
-    public static class Audio
-    {
-    }
 }

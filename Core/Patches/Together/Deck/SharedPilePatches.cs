@@ -1,3 +1,5 @@
+using System.Reflection;
+
 using HarmonyLib;
 using MegaCrit.Sts2.Core.Entities.Ascension;
 using MegaCrit.Sts2.Core.Entities.Cards;
@@ -11,9 +13,6 @@ using Together.Core.Utils;
 
 namespace Together.Core.Patches.Deck;
 
-// ======================================================================
-// 合并自 Core/Multiplayer/SharedPilePatches.cs（2026-09-21 合并文件，正文未改动）
-// ======================================================================
 /// <summary>
 /// M1：共享牌库的共享逻辑（不含补丁特性）。
 /// </summary>
@@ -215,46 +214,37 @@ internal static class SharedPileImpl
     }
 }
 
-[HarmonyPatch(typeof(PlayerCombatState), "get_DrawPile")]
-internal static class DrawPileRedirectPatch
+/// <summary>战斗牌堆重定向：回声的四口堆都返回锚点那一份（手牌不在这里，各人各一份）。</summary>
+[HarmonyPatch]
+internal static class CombatPileRedirectPatch
 {
-    [HarmonyPostfix]
-    private static void Postfix(PlayerCombatState __instance, ref CardPile __result)
+    private static IEnumerable<MethodBase> TargetMethods()
     {
-        SharedPileImpl.Redirect(__instance, PileType.Draw, ref __result);
+        yield return AccessTools.Method(typeof(PlayerCombatState), "get_DrawPile");
+        yield return AccessTools.Method(typeof(PlayerCombatState), "get_DiscardPile");
+        yield return AccessTools.Method(typeof(PlayerCombatState), "get_ExhaustPile");
+        yield return AccessTools.Method(typeof(PlayerCombatState), "get_PlayPile");
+    }
+
+    [HarmonyPostfix]
+    private static void Postfix(PlayerCombatState __instance, ref CardPile __result, MethodBase __originalMethod)
+    {
+        SharedPileImpl.Redirect(__instance, PileTypeOf(__originalMethod.Name), ref __result);
+    }
+
+    private static PileType PileTypeOf(string getter)
+    {
+        return getter switch
+        {
+            "get_DrawPile" => PileType.Draw,
+            "get_DiscardPile" => PileType.Discard,
+            "get_ExhaustPile" => PileType.Exhaust,
+            _ => PileType.Play,
+        };
     }
 }
 
-[HarmonyPatch(typeof(PlayerCombatState), "get_DiscardPile")]
-internal static class DiscardPileRedirectPatch
-{
-    [HarmonyPostfix]
-    private static void Postfix(PlayerCombatState __instance, ref CardPile __result)
-    {
-        SharedPileImpl.Redirect(__instance, PileType.Discard, ref __result);
-    }
-}
-
-[HarmonyPatch(typeof(PlayerCombatState), "get_ExhaustPile")]
-internal static class ExhaustPileRedirectPatch
-{
-    [HarmonyPostfix]
-    private static void Postfix(PlayerCombatState __instance, ref CardPile __result)
-    {
-        SharedPileImpl.Redirect(__instance, PileType.Exhaust, ref __result);
-    }
-}
-
-[HarmonyPatch(typeof(PlayerCombatState), "get_PlayPile")]
-internal static class PlayPileRedirectPatch
-{
-    [HarmonyPostfix]
-    private static void Postfix(PlayerCombatState __instance, ref CardPile __result)
-    {
-        SharedPileImpl.Redirect(__instance, PileType.Play, ref __result);
-    }
-}
-
+/// <summary>run 期主卡组重定向：回声的 <c>Deck</c> 指向锚点那一份。</summary>
 [HarmonyPatch(typeof(Player), "get_Deck")]
 internal static class DeckRedirectPatch
 {
@@ -269,21 +259,7 @@ internal static class DeckRedirectPatch
         if (TogetherPair.Anchor is { } anchor)
         {
             __result = anchor.Deck;
-            LogDeckRedirect(anchor);
         }
-    }
-
-    private static int _logged;
-
-    /// <summary>临时诊断：确认卡组重定向真的执行了（前几次）。</summary>
-    private static void LogDeckRedirect(Player anchor)
-    {
-        if (System.Threading.Interlocked.Increment(ref _logged) > 5)
-        {
-            return;
-        }
-
-        SelfCheck.Write($"[together][diag] 设置回声 Deck → 锚点卡组({anchor.Deck.Cards.Count} 张)");
     }
 }
 
@@ -345,9 +321,6 @@ internal static class CombatStateCreatedPatch
     }
 }
 
-// ======================================================================
-// 合并自 Core/Multiplayer/AscensionBaneDedupePatch.cs（2026-09-21 合并文件，正文未改动）
-// ======================================================================
 /// <summary>
 /// 进阶之灾去重：共享卡组下本体"逐玩家各加一张"的诅咒会变成两张。
 /// </summary>
@@ -455,9 +428,6 @@ internal static class AscensionBaneDedupePatch
     }
 }
 
-// ======================================================================
-// 合并自 Core/Multiplayer/DeterministicCardComparePatch.cs（2026-09-21 合并文件，正文未改动）
-// ======================================================================
 /// <summary>
 /// 让卡牌之间的排序变成<b>全序</b>，从而让 <c>StableShuffle</c> 真正"与输入顺序无关"。
 /// </summary>
@@ -496,9 +466,6 @@ internal static class DeterministicCardComparePatch
     }
 }
 
-// ======================================================================
-// 合并自 Core/Multiplayer/DeterministicInitialShufflePatch.cs（2026-09-21 合并文件，正文未改动）
-// ======================================================================
 /// <summary>
 /// 初始洗牌（<c>CardPile.RandomizeOrderInternal</c>）前先把牌堆排成两端一致的顺序。
 /// </summary>
@@ -535,9 +502,6 @@ internal static class DeterministicInitialShufflePatch
     }
 }
 
-// ======================================================================
-// 合并自 Core/Multiplayer/RunStartPatches.cs（2026-09-21 合并文件，正文未改动）
-// ======================================================================
 /// <summary>
 /// 新跑局：等 <c>RunState</c> 完全构造完之后再激活共享配对。
 /// </summary>

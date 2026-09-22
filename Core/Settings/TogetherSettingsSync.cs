@@ -146,25 +146,6 @@ internal static class TogetherSettingsSync
         }
     }
 
-    /// <summary>本局实际生效的"事件是否改成共享事件"（客户端跟随主机）。</summary>
-    public static bool EffectiveShareEvents
-    {
-        get
-        {
-            Initialize();
-
-            lock (Gate)
-            {
-                if (_remote is { } remote)
-                {
-                    return remote.ShareEvents;
-                }
-            }
-
-            return TogetherSettingsStore.ShareEvents;
-        }
-    }
-
     public static void Initialize()
     {
         lock (Gate)
@@ -228,8 +209,7 @@ internal static class TogetherSettingsSync
                 TogetherSettingsStore.MergeStarterDecks,
                 TogetherSettingsStore.HpBonusPercent,
                 TogetherSettingsStore.GroupSize,
-                TogetherSettingsStore.ShareGold,
-                TogetherSettingsStore.ShareEvents),
+                TogetherSettingsStore.ShareGold),
             (_, _) => false,
             (state, _) => state);
     }
@@ -266,8 +246,7 @@ internal static class TogetherSettingsSync
         Main.Logger.Info(
             $"[together] 跟随主机设置：共生体={snapshot.SymbiosisEnabled}"
             + $" 合并初始卡组={snapshot.MergeStarterDecks} 血量提升={snapshot.HpBonusPercent}%"
-            + $" 人数上限={snapshot.GroupSize} 共享金币={snapshot.ShareGold}"
-            + $" 事件共享={snapshot.ShareEvents}");
+            + $" 人数上限={snapshot.GroupSize} 共享金币={snapshot.ShareGold}");
     }
 
     private sealed record Snapshot(
@@ -275,8 +254,7 @@ internal static class TogetherSettingsSync
         bool MergeStarterDecks,
         int HpBonusPercent,
         int GroupSize,
-        bool ShareGold,
-        bool ShareEvents);
+        bool ShareGold);
 }
 
 /// <summary>主机开 ENet 服（直连）时广播一次。</summary>

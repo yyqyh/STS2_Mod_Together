@@ -20,9 +20,6 @@ using Together;
 
 namespace Together.Core.Patches.Deck;
 
-// ======================================================================
-// 合并自 Core/Multiplayer/CardOwnershipPatches.cs（2026-09-21 合并文件，正文未改动）
-// ======================================================================
 /// <summary>
 /// M1：卡牌归属（owner）的维护规则。
 /// </summary>
@@ -85,72 +82,6 @@ internal static class CardOwnershipImpl
         card.GiveToAnotherPlayer(handOwner);
     }
 
-    /// <summary>
-    /// <b>只在"混合归属"的批量操作里</b>把 owner 统一到锚点。
-    /// </summary>
-    /// <remarks>
-    /// <para>
-    /// 为什么必须"只在混合时"才动：本体的动画/节点流程里有一句
-    /// <c>LocalContext.IsMe(card.Owner)</c> 判定（见 <c>CardPileCmd.GetTweenForCardsChangingPiles</c>），
-    /// 不是"本地玩家的牌"就会 <c>continue</c>、**完全跳过节点处理**。
-    /// 早期版本无条件把离开手牌的牌归到锚点，于是 p2 的牌在判定之前 owner 就变了
-    /// → 手牌节点没人清 → 幽灵卡（p1 是锚点所以看不出来，正好对应"p1 正常、p2 有幽灵"）。
-    /// </para>
-    /// <para>
-    /// 而同属一个玩家的批量（典型就是回合结束清手牌）本来就能通过本体的
-    /// "同批 owner 必须一致"校验，**根本不需要归一化**。
-    /// 真正需要的只有洗牌那类把不同玩家的牌混进共享堆的操作 —— 那类批量里没有手牌节点。
-    /// </para>
-    /// </remarks>
-    internal static void NormalizeBatchIfMixed(IReadOnlyList<CardModel> cards)
-    {
-        // ⚠️ 已停用（2026-09-15）：调用点已经注释掉（见文件末尾 CardOwnerBatchPatch）。
-        // 原因：这条"批量入堆前统一归属"和"入堆后统一归属"都属于**时机过早**的改写，
-        // 会让 owner 与实际所在手牌脱钩 → 界面漏掉移除手牌节点 → 幽灵卡。
-        // 现在归属改写统一交给 SharedPileOwnerLateNormalizePatch（挂在 AfterCardChangedPiles，
-        // 即"搬完 + 动画播完"之后）。要恢复本方法，把调用点那行取消注释即可 ——
-        // 但请先确认幽灵卡不会因此回归。
-        if (!TogetherPair.IsActive || TogetherPair.Anchor is not { } anchor || cards.Count == 0)
-        {
-            return;
-        }
-
-        Player? first = null;
-        var mixed = false;
-
-        foreach (var card in cards)
-        {
-            var owner = OwnerOf(card);
-            if (owner is null)
-            {
-                return;
-            }
-
-            if (first is null)
-            {
-                first = owner;
-            }
-            else if (!ReferenceEquals(first, owner))
-            {
-                mixed = true;
-                break;
-            }
-        }
-
-        if (!mixed)
-        {
-            return;
-        }
-
-        foreach (var card in cards)
-        {
-            if (!ReferenceEquals(OwnerOf(card), anchor))
-            {
-                card.GiveToAnotherPlayer(anchor);
-            }
-        }
-    }
-
     private static Player? OwnerOf(CardModel card)
     {
         try
@@ -200,43 +131,6 @@ internal static class CardOwnerSinglePatch
     }
 }
 
-/// <summary>
-/// 批量进堆的入口：只在"混合归属"时把 owner 统一到锚点（典型场景是洗牌）。
-/// </summary>
-[HarmonyPatch(
-    typeof(CardPileCmd),
-    nameof(CardPileCmd.Add),
-    new[]
-    {
-        typeof(IEnumerable<CardModel>), typeof(CardPile), typeof(CardPilePosition),
-        typeof(AbstractModel), typeof(bool), typeof(bool),
-    })]
-internal static class CardOwnerBatchPatch
-{
-    [HarmonyPrefix]
-    private static void Prefix(IEnumerable<CardModel> __0)
-    {
-        // 只在参数本身是实体集合时预先枚举（惰性序列不能安全预枚举，原方法还要再枚举一次）。
-        if (__0 is not IReadOnlyList<CardModel> cards)
-        {
-            return;
-        }
-
-        try
-        {
-            // 已停用（时机过早，会造成幽灵卡）：归属改写改在 SharedPileOwnerLateNormalizePatch。
-            // CardOwnershipImpl.NormalizeBatchIfMixed(cards);
-        }
-        catch (Exception ex)
-        {
-            Log.Warn($"[together] 批量归属规整失败：{ex.Message}");
-        }
-    }
-}
-
-// ======================================================================
-// 合并自 Core/Multiplayer/CardLastHandOwnerPatch.cs（2026-09-21 合并文件，正文未改动）
-// ======================================================================
 /// <summary>
 /// 记住每张牌"最后一次躺在谁的手牌里"。
 /// </summary>
@@ -344,9 +238,6 @@ internal static class ExhaustedOwnerForHooksPatch
     }
 }
 
-// ======================================================================
-// 合并自 Core/Multiplayer/DifferentOwnersCheckPatch.cs（2026-09-21 合并文件，正文未改动）
-// ======================================================================
 /// <summary>
 /// 方法 1（重做版）：打掉批量 <c>CardPileCmd.Add</c> 里那条"同批 owner 必须一致"的校验，
 /// 让共享牌堆里的牌保持<b>自然归属</b>。
@@ -474,9 +365,6 @@ internal static class DifferentOwnersCheckPatch
     }
 }
 
-// ======================================================================
-// 合并自 Core/Multiplayer/DiscardDrawTargetFix.cs（2026-09-21 合并文件，正文未改动）
-// ======================================================================
 /// <summary>
 /// "弃掉整手牌、再抽同样数量"（计算下注 / 赌徒之酿 / 赌徒筹码）的抽牌对象修正。
 /// </summary>
@@ -641,9 +529,6 @@ internal static class DrawRedirectToHandOwnerPatch
     }
 }
 
-// ======================================================================
-// 合并自 Core/Multiplayer/HandOwnershipInvariantPatch.cs（2026-09-21 合并文件，正文未改动）
-// ======================================================================
 /// <summary>
 /// 手牌归属不变量：<b>在谁手里就归谁</b>。
 /// </summary>
@@ -700,9 +585,6 @@ internal static class HandOwnershipInvariantPatch
     }
 }
 
-// ======================================================================
-// 合并自 Core/Multiplayer/HandReturnOwnershipPatch.cs（2026-09-21 合并文件，正文未改动）
-// ======================================================================
 /// <summary>
 /// "从共享堆拿牌回手"这一类效果的归属修正。
 /// </summary>
@@ -1039,9 +921,6 @@ internal static class HandReturnBatchPilePatch
     }
 }
 
-// ======================================================================
-// 合并自 Core/Multiplayer/SharedPileOwnerLateNormalizePatch.cs（2026-09-21 合并文件，正文未改动）
-// ======================================================================
 /// <summary>
 /// 归属改写的**正确时机**：牌彻底离开手牌、且搬运动画已经播完之后，再把共享堆里的牌统一归锚点。
 /// </summary>

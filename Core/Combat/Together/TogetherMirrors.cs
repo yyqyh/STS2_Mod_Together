@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Runtime.CompilerServices;
 
 using HarmonyLib;
@@ -15,9 +16,6 @@ using Together.Core.Utils;
 
 namespace Together.Core.Combat;
 
-// ======================================================================
-// 合并自 Core/Multiplayer/BodyMirror.cs（2026-09-21 合并文件，正文未改动）
-// ======================================================================
 /// <summary>
 /// 共享身体（生命 / 最大生命 / 格挡）的镜像逻辑（不含补丁特性）。
 /// </summary>
@@ -165,48 +163,40 @@ internal static class BodyMirror
     }
 }
 
-[HarmonyPatch(typeof(Creature), "Block", MethodType.Setter)]
-internal static class BlockMirrorPatch
+/// <summary>身体数值（格挡 / 当前生命 / 生命上限）的 setter 一改，就镜像给共生的另一半。</summary>
+[HarmonyPatch]
+internal static class BodyStatMirrorPatch
 {
+    private static IEnumerable<MethodBase> TargetMethods()
+    {
+        yield return AccessTools.Method(typeof(Creature), "set_Block");
+        yield return AccessTools.Method(typeof(Creature), "set_CurrentHp");
+        yield return AccessTools.Method(typeof(Creature), "set_MaxHp");
+    }
+
     [HarmonyPostfix]
-    private static void Postfix(Creature __instance)
+    private static void Postfix(Creature __instance, MethodBase __originalMethod)
     {
         foreach (var other in __instance.OthersOrEmpty())
         {
-            BodyMirror.MirrorBlock(__instance, other);
+            switch (__originalMethod.Name)
+            {
+                case "set_Block":
+                    BodyMirror.MirrorBlock(__instance, other);
+                    break;
+
+                case "set_CurrentHp":
+                    BodyMirror.MirrorHp(__instance, other);
+                    break;
+
+                default:
+                    BodyMirror.MirrorMaxHp(__instance, other);
+                    break;
+            }
         }
     }
 }
 
-[HarmonyPatch(typeof(Creature), "CurrentHp", MethodType.Setter)]
-internal static class CurrentHpMirrorPatch
-{
-    [HarmonyPostfix]
-    private static void Postfix(Creature __instance)
-    {
-        foreach (var other in __instance.OthersOrEmpty())
-        {
-            BodyMirror.MirrorHp(__instance, other);
-        }
-    }
-}
-
-[HarmonyPatch(typeof(Creature), "MaxHp", MethodType.Setter)]
-internal static class MaxHpMirrorPatch
-{
-    [HarmonyPostfix]
-    private static void Postfix(Creature __instance)
-    {
-        foreach (var other in __instance.OthersOrEmpty())
-        {
-            BodyMirror.MirrorMaxHp(__instance, other);
-        }
-    }
-}
-
-// ======================================================================
-// 合并自 Core/Multiplayer/PowerMirror.cs（2026-09-21 合并文件，正文未改动）
-// ======================================================================
 /// <summary>
 /// 状态（powers）镜像的共享逻辑（不含补丁特性）。
 /// </summary>
@@ -623,9 +613,6 @@ internal static class PowerSecondHitApplyPatch
     }
 }
 
-// ======================================================================
-// 合并自 Core/Multiplayer/GoldMirror.cs（2026-09-21 合并文件，正文未改动）
-// ======================================================================
 /// <summary>
 /// 金币共享（可选）：组内只有一个钱包。
 /// </summary>
