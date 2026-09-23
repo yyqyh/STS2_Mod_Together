@@ -11,6 +11,7 @@ using MegaCrit.Sts2.Core.GameActions.Multiplayer;
 using MegaCrit.Sts2.Core.Logging;
 using MegaCrit.Sts2.Core.Models.Powers;
 using MegaCrit.Sts2.Core.Models;
+using MegaCrit.Sts2.Core.Nodes.Rooms;
 using Together.Core.Settings;
 using Together.Core.Utils;
 
@@ -84,6 +85,98 @@ internal static class BodyMirror
     internal static void MirrorMaxHp(Creature source, Creature target)
     {
         Mirror(() => PushMaxHp(source, target));
+    }
+
+    /// <summary>
+    /// 召唤物专用：只推 生命上限 + 当前生命。
+    /// </summary>
+    /// <remarks>
+    /// 和身体那两条的区别：不做"一死一活拉平"（召唤物死了就是要死，推到 0 就是本体的死），也不推格挡。
+    /// </remarks>
+    internal static void MirrorPetHp(Creature source, Creature target)
+    {
+        Mirror(() =>
+        {
+            PushMaxHp(source, target);
+            PushPetHp(source, target);
+        });
+    }
+
+    internal static void MirrorPetMaxHp(Creature source, Creature target)
+    {
+        Mirror(() => PushMaxHp(source, target));
+    }
+
+    /// <summary>
+    /// 召唤物血量：死→活必须走 <c>HealInternal</c>（它会补 <c>Revived</c> 事件，界面靠它把召唤物重新显示出来），
+    /// 直接写字段只会让数据活了、画面还是空的。
+    /// </summary>
+    private static void PushPetHp(Creature from, Creature to)
+    {
+        if (from.CurrentHp == to.CurrentHp)
+        {
+            return;
+        }
+
+        if (to.IsDead && from.IsAlive)
+        {
+            to.HealInternal(from.CurrentHp - to.CurrentHp);
+            RefreshPetNode(to);
+            return;
+        }
+
+        to.SetCurrentHpInternal(from.CurrentHp);
+        RefreshPetNode(to);
+    }
+
+    /// <summary>
+    /// 让<b>本机</b>的召唤物节点立刻把"活着 + 血量"显示出来（对方召的 / 复活的也一样）。
+    /// </summary>
+    /// <remarks>
+    /// 召唤物在本体里只有一个生物节点（共享战斗状态），但存活状态与大小是画面自己缓存的：
+    /// 只在数据层把血写回去，另一侧窗口可能还停在"隐藏/空血"的样子。这里补一次显示刷新。
+    /// 节点找不到时只留一条诊断，方便判断"是不是这台机器压根没建这只召唤物的节点"。
+    /// </remarks>
+    /// <remarks>
+    /// <b>必须延到帧末做</b>：血量 setter 是在"伤害结算"的同步路径里被调的，这里直接动节点
+    /// （Tween / 重设显示）等于在结算中间插一次 UI 操作 —— 实测（22:15 log）P2 打出第三张牌后
+    /// 日志停在"playing card …"这一行、之后什么都没有（结算没走完），高度怀疑就是这条路径卡住。
+    /// 改成 <c>CallDeferred</c> 之后，节点刷新永远发生在当帧结算之外，最坏情况也只是"晚一帧显示"。
+    /// </remarks>
+    private static void RefreshPetNode(Creature pet)
+    {
+        try
+        {
+            Godot.Callable.From(() =>
+            {
+                try
+                {
+                    var node = NCombatRoom.Instance?.GetCreatureNode(pet);
+                    if (node is null || !Godot.GodotObject.IsInstanceValid(node))
+                    {
+                        CappedLog.Info("summon.missing", $"本机没有召唤物节点（{pet.LogName}），血量只能在数据层同步");
+                        return;
+                    }
+
+                    // 死掉的那只不要跟着血上限变大/缩小：它的显示交给"复活"流程负责。
+                    // （实测：镜像把血上限同步过去时，未复活的奥斯提也一起变大了。）
+                    if (pet.IsDead)
+                    {
+                        return;
+                    }
+
+                    node.OstyScaleToSize(pet.MaxHp, 0.2);
+                }
+                catch (Exception ex)
+                {
+                    CappedLog.Info("summon.missing", $"刷新召唤物节点失败（忽略）：{ex.GetType().Name}: {ex.Message}");
+                }
+            }).CallDeferred();
+        }
+        catch (Exception ex)
+        {
+            CappedLog.Info("summon.missing", $"安排召唤物节点刷新失败（忽略）：{ex.GetType().Name}: {ex.Message}");
+        }
     }
 
     private static void Mirror(Action action)
@@ -177,9 +270,11 @@ internal static class BodyStatMirrorPatch
     [HarmonyPostfix]
     private static void Postfix(Creature __instance, MethodBase __originalMethod)
     {
+        var setter = __originalMethod.Name;
+
         foreach (var other in __instance.OthersOrEmpty())
         {
-            switch (__originalMethod.Name)
+            switch (setter)
             {
                 case "set_Block":
                     BodyMirror.MirrorBlock(__instance, other);
@@ -192,6 +287,25 @@ internal static class BodyStatMirrorPatch
                 default:
                     BodyMirror.MirrorMaxHp(__instance, other);
                     break;
+            }
+        }
+
+        // 召唤物（奥斯提这类"替你去死"的 pet）：两名成员各一只，血量必须一致 ——
+        // 打向主人的未格挡伤害会被本体改道到召唤物身上，两端不同步的话一边死了另一边还活着。
+        // 只推血量/上限；pet 上显示的格挡是"主人的格挡"，本体自己画，不跟着推。
+        // 召唤期间**不推**：这一波数值由本体自己处理（新建的就新建、已有的走 GainMaxHp），
+        // 镜像插手只会把"队友那次召唤"的结果抄回去、和本体语义打架（实测"5→5→再5→10 翻倍"）。
+        if (setter is "set_CurrentHp" or "set_MaxHp"
+            && !PetSummonFanoutPatch.IsFanningOut
+            && SummonMirror.PartnerOf(__instance) is { } counterpart)
+        {
+            if (setter == "set_CurrentHp")
+            {
+                BodyMirror.MirrorPetHp(__instance, counterpart);
+            }
+            else
+            {
+                BodyMirror.MirrorPetMaxHp(__instance, counterpart);
             }
         }
     }
@@ -234,6 +348,13 @@ internal static class PowerMirror
     {
         [typeof(PanachePower)] = PowerMirrorPolicy.SingleInstance,
         [typeof(AfterimagePower)] = PowerMirrorPolicy.SingleInstance,
+        // 夜魇：内部数据（选中的那张牌）是 Nightmare.OnPlay 事后 SetSelectedCard 填的，
+        // 镜像出来的副本没有这份数据 → 副本在"下回合抽牌补 3 张复制品"时 card 为 null 直接 NRE、卡死。
+        // 实测 22:55 log：栈顶就是 NightmarePower.BeforeHandDraw。这类"数据靠模型自己填"的能力一律不复制。
+        [typeof(NightmarePower)] = PowerMirrorPolicy.SingleInstance,
+        // 模仿学习：本体靠 PlayerTarget 找"我自己挂的那一份副本"（Powers.OfType<…>().FirstOrDefault(s => s.PlayerTarget == …)），
+        // 而镜像出来的副本没有这份目标 → 命中错误的实例/空目标，直接崩。属于"副本缺目标/主人"这一类。
+        [typeof(ImitationLearningPower)] = PowerMirrorPolicy.SingleInstance,
     };
 
     private static int _mirrorDepth;
@@ -259,9 +380,88 @@ internal static class PowerMirror
 
     internal static PowerMirrorPolicy PolicyOf(PowerModel power)
     {
-        return Overrides.TryGetValue(power.GetType(), out var policy)
-            ? policy
-            : PowerMirrorPolicy.Mirror;
+        // ① 手工名单优先（Overrides：明确该不镜像 / 明确该镜像的例外）
+        if (Overrides.TryGetValue(power.GetType(), out var policy))
+        {
+            return policy;
+        }
+
+        // ② 统一规则：带“内部数据”的能力默认不镜像。
+        //    判据 = 该类型自己重写了 PowerModel.InitInternalData()（内部数据是施加后由模型另行填充的，
+        //    镜像出来的副本必然缺这份数据 —— 夜魇的 selectedCard 就是这么让副本在 BeforeHandDraw 崩掉的）。
+        //    自动判定覆盖原版与其它 mod 的全部能力，手工名单只用来纠正误判。
+        return HasInternalData(power) ? PowerMirrorPolicy.SingleInstance : PowerMirrorPolicy.Mirror;
+    }
+
+    /// <summary>类型 → 是否带内部数据（重写了 InitInternalData）。</summary>
+    private static readonly Dictionary<Type, bool> InternalDataCache = [];
+
+    private static bool HasInternalData(PowerModel power)
+    {
+        var type = power.GetType();
+        if (InternalDataCache.TryGetValue(type, out var cached))
+        {
+            return cached;
+        }
+
+        bool stateful;
+        try
+        {
+            // 依据（“以崩溃原因为基准”）＝ 副本会缺东西的两种信号：
+            //   ① 自己重写了 InitInternalData()（内部数据是施加后另行填充的，副本没有）；
+            //   ② 自己声明了“可写的 目标/主人 引用”（Player / Creature / CardModel）——
+            //      说明它记得某个人或某张牌（模仿学习的 PlayerTarget 就是这条）。
+            stateful = DeclaresInitInternalData(type) || DeclaresOwnerOrTargetMember(type);
+        }
+        catch (Exception)
+        {
+            stateful = false;
+        }
+
+        static bool DeclaresInitInternalData(Type t)
+        {
+            return t.GetMethod("InitInternalData", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public)
+                is { DeclaringType: { } declaring } && declaring == t;
+        }
+
+        static bool DeclaresOwnerOrTargetMember(Type t)
+        {
+            const BindingFlags flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly;
+
+            foreach (var field in t.GetFields(flags))
+            {
+                if (!field.IsInitOnly && IsOwnerLike(field.FieldType))
+                {
+                    return true;
+                }
+            }
+
+            foreach (var property in t.GetProperties(flags))
+            {
+                if (property.CanWrite && IsOwnerLike(property.PropertyType))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        static bool IsOwnerLike(Type t)
+        {
+            return t == typeof(MegaCrit.Sts2.Core.Entities.Players.Player)
+                || t == typeof(MegaCrit.Sts2.Core.Entities.Creatures.Creature)
+                || t == typeof(MegaCrit.Sts2.Core.Models.CardModel);
+        }
+
+        InternalDataCache[type] = stateful;
+
+        if (stateful)
+        {
+            Log.Info($"[together] power.mirror：{type.Name} → 不镜像（带内部数据，副本会缺数据）");
+        }
+
+        return stateful;
     }
 
     // ======================================================================

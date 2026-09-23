@@ -2,6 +2,7 @@ using System.Reflection;
 
 using HarmonyLib;
 
+using MegaCrit.Sts2.Core.Combat;
 using MegaCrit.Sts2.Core.Commands;
 using MegaCrit.Sts2.Core.Entities.Cards;
 using MegaCrit.Sts2.Core.Entities.Creatures;
@@ -65,7 +66,18 @@ internal static class RandomPickOrder
             return;
         }
 
-        DeterministicCardOrder.SortPile(pile, why);
+        // 主卡组只在**战斗进行中**归一：战斗里"随机取牌"才需要两端顺序一致；战斗外（事件房间等）
+        // 本体的"按下标读卡组"是有语义的 —— 镜子事件 Reflections 就是 Deck.Cards[i] 逐张复制整副牌，
+        // 我们一重排，它就一直在复制排在最前面那张（进阶之灾 → 40+ 张）。
+        // 顺带也让"选牌协议按 DeckIndex 解析"（NetDeckCard）在战斗外更稳（顺序不再被我们动）。
+        // 弃牌堆没有这种下标语义，维持一直归一。
+        if (pile.Type == PileType.Deck && CombatManager.Instance?.IsInProgress is not true)
+        {
+            return;
+        }
+
+        // 原来只做归一（同名卡会扎堆）；现在归一 + 确定性重排：两端一致，但看起来是随机序。
+        DeterministicCardOrder.SortAndMix(pile, why);
     }
 
     /// <summary>取牌之前把某口堆排成两端一致（只有明确知道"这口堆此刻只被随机读取"时才用）。</summary>

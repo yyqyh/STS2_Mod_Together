@@ -211,6 +211,10 @@ internal static class SharedPileImpl
 
         // 生命 / 格挡的初始值也要拉平一次（Creature 构造函数是直接写字段、不走 setter 的）。
         BodyMirror.SyncAll();
+
+        // 球位（故障机器人的 orb）同样并到同一口队列上；靠这里的"锚点状态建好后会补做"这条路径收齐。
+        OrbSlotSharing.Link(player);
+
     }
 }
 
@@ -308,6 +312,12 @@ internal static class PopulateCombatStateAnchorOnlyPatch
             + $"isAnchor={TogetherPair.IsAnchor(player)} isEcho={TogetherPair.IsEcho(player)} "
             + $"deck={player.Deck.Cards.Count} "
             + $"anchorDeck={anchor?.Deck.Cards.Count} 成员数={TogetherPair.MemberCount} deckShared={deckShared}");
+
+        // 球位 / 召唤物的字段替换必须在**赋值之后**做：PlayerCombatState 的构造函数后置补丁跑在
+        // `PlayerCombatState = new PlayerCombatState(this)` 这句赋值之前，那时 player.PlayerCombatState 还是 null，
+        // 我们根本拿不到要换的那份实例（实测 log：`已有战斗状态 1 人 → 本次归并 0 份`，等于一次都没换成）。
+        // PopulateCombatState 是本体的"进战斗填充"入口，跑在这里一定已经赋值完毕，而且对回声也照样会被调用（我们只是跳过它的主体）。
+            OrbSlotSharing.Link(player);
     }
 }
 

@@ -6,7 +6,7 @@ using Together.Core.Settings;
 namespace Together.Core.Combat;
 
 /// <summary>
-/// 选人阶段关于共生体的两条规则：谁还能"确定"，以及能不能起程。
+/// 选人阶段关于共享卡组的两条规则：谁还能"确定"，以及能不能起程。
 /// </summary>
 /// <remarks>
 /// <para>
@@ -15,8 +15,10 @@ namespace Together.Core.Combat;
 /// 这两样都是两端一致的，所以"第三个人按不动"在两边看到的结果相同。
 /// </para>
 /// <para>
-/// 规则：名额两个；已经确定过的人可以再按一次取消；第三个人按不动。
-/// 只有一个人确定时不让起程——否则会开出一局"一个人的普通游戏"，跟按按钮时的预期不符。
+/// 规则：名额 = 设置里的"人数上限"（默认 2）；已经确定过的人可以再按一次取消；名额满了别人按不动。
+/// <b>起程门控</b>：0 人确定 = 普通联机局；<b>达到最小人数（2 人）就放行</b>——这些人共享卡组
+/// （真正配对见 <c>TogetherPair.Arm</c>，它按"确定过的人 + 至少 MinMembers"成组，不要求凑满名额）。
+/// 只有"确定了 1 个人"时拦住：否则会开出一局"一个人的普通游戏"，和按按钮时的预期不符。
 /// </para>
 /// </remarks>
 internal static class TogetherCoopGate
@@ -92,7 +94,7 @@ internal static class TogetherCoopGate
     /// <summary>
     /// 能不能起程。
     /// </summary>
-    /// <remarks>0 人或满 2 人都可以；只有"确定了 1 个人"时拦住。</remarks>
+    /// <remarks>0 人（普通联机）或达到最小人数（2 人 → 共享卡组）都可以；只有"确定了 1 个人"时拦住。</remarks>
     public static bool CanEmbark(StartRunLobby? lobby)
     {
         if (!Applies(lobby))
@@ -101,6 +103,6 @@ internal static class TogetherCoopGate
             return true;
         }
 
-        return CountConfirmed(lobby) != 1;
+        return CountConfirmed(lobby) is 0 or >= TogetherPair.MinMembers;
     }
 }

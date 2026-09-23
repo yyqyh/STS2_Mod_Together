@@ -10,7 +10,7 @@ using Together.Core.Utils;
 
 namespace Together.Core.Patches;
 
-/// <summary>选人界面的共生体逻辑（按钮 + 起程门控），补丁接在文件末尾。</summary>
+/// <summary>选人界面的共享卡组逻辑（按钮 + 起程门控），补丁接在文件末尾。</summary>
 internal static class CharacterSelectGateImpl
 {
     /// <summary>当前打开的角色选择界面（屏幕自己在 OnSubmenuOpened 时登记）。</summary>
@@ -46,7 +46,7 @@ internal static class CharacterSelectGateImpl
         _timer = null;
     }
 
-    /// <summary>把「共生体」按钮挂到选人界面上（关闭共生体 / 单人局时只是隐藏）。</summary>
+    /// <summary>把「共享卡组」按钮挂到选人界面上（关闭开关 / 单人局时只是隐藏）。</summary>
     private static void Install(NCharacterSelectScreen screen)
     {
         if (_button is not null && GodotObject.IsInstanceValid(_button) && _button.GetParent() == screen)
@@ -60,7 +60,7 @@ internal static class CharacterSelectGateImpl
         var button = new Button
         {
             Name = "TogetherSymbiosisButton",
-            Text = "确定参加共生体",
+            Text = "共享卡组",
             CustomMinimumSize = new Vector2(340, 52),
             ZIndex = 100,
         };
@@ -75,7 +75,7 @@ internal static class CharacterSelectGateImpl
         button.OffsetBottom = -98;
         button.Pressed += () => OnPressed(screen);
 
-        // 别人确定之后本地的按钮也要立刻变灰/变字：用一个 0.2s 的 Timer 对齐，
+        // 别人确定之后本地的按钮/官方确认键都要立刻跟上：用一个 0.2s 的 Timer 对齐，
         // 不直接在网络回调里碰 UI 节点（那个回调不保证在主线程）。
         var timer = new Godot.Timer
         {
@@ -87,10 +87,17 @@ internal static class CharacterSelectGateImpl
         screen.AddChild(timer);
         timer.Timeout += () =>
         {
-            if (GodotObject.IsInstanceValid(screen))
+            if (!GodotObject.IsInstanceValid(screen))
             {
-                Refresh(screen);
+                return;
             }
+
+            Refresh(screen);
+
+            // 官方确认键也要一起刷新：本体的 NConfirmButton.Disable() 是把按钮滑出屏幕，
+            // 而它自己只在"打开界面 / 换人"时 Enable 一次，所以"另一个人按下确定"这种网络变化
+            // 不会让按钮回来 —— 这就是"两人确认完还得主机取消再确认"的原因。
+            RefreshEmbark(screen);
         };
 
         _button = button;
@@ -145,16 +152,16 @@ internal static class CharacterSelectGateImpl
         // 文案要说清"能不能再按一次取消" —— 光写"确定参加共生体"没人知道还能退出。
         if (confirmed)
         {
-            button.Text = $"共生体：已确定（{count}/{capacity}）· 再按一下退出";
+            button.Text = $"共享卡组：已确定（{count}/{capacity}）· 再按一下退出";
         }
         else if (count >= capacity)
         {
-            button.Text = $"共生体：名额已满（{count}/{capacity}）· 没位置了";
+            button.Text = $"共享卡组：名额已满（{count}/{capacity}）· 没位置了";
             button.Disabled = true;
         }
         else
         {
-            button.Text = $"共生体：未确定（{count}/{capacity}）· 按一下加入";
+            button.Text = $"共享卡组：未确定（{count}/{capacity}）· 按一下加入";
         }
     }
 
@@ -193,7 +200,14 @@ internal static class CharacterSelectGateImpl
         RefreshEmbark(screen);
     }
 
-    /// <summary>起程门控：只有"确定了 1 个人"时拦住（0 人或满 2 人都放行）。</summary>
+    /// <summary>
+    /// 起程门控：0 人确定（普通联机）或达到最小人数（≥2，这些人共享卡组）都放行；只有"确定了 1 个人"时拦住。
+    /// </summary>
+    /// <remarks>
+    /// 必须被反复调用（0.2 秒的轮询 + 每次换人）：官方确认键被拦下时是<b>滑出屏幕</b>（<c>NConfirmButton.Disable</c>），
+    /// 而本体只在"打开界面 / 换人"时 Enable 一次，网络侧的人数变化不会触发它。
+    /// <c>Enable/Disable</c> 本身幂等，重复调用不会重播动画，所以这里放心跟着轮询一起刷。
+    /// </remarks>
     internal static void RefreshEmbark(NCharacterSelectScreen screen)
     {
         var lobby = screen.Lobby;
@@ -217,14 +231,16 @@ internal static class CharacterSelectGateImpl
             return;
         }
 
-        if (TogetherCoopGate.CanEmbark(lobby))
+        var canEmbark = TogetherCoopGate.CanEmbark(lobby);
+        if (embark.IsEnabled != canEmbark)
         {
-            embark.Enable();
+            CappedLog.Info(
+                "symbiosis.embark",
+                $"官方确认键：{(canEmbark ? "放行" : "拦住（只确定了 1 人）")}"
+                + $"（已确定 {TogetherCoopGate.CountConfirmed(lobby)} 人；达到 {TogetherPair.MinMembers} 人即共享卡组）");
         }
-        else
-        {
-            embark.Disable();
-        }
+
+        embark.SetEnabled(canEmbark);
     }
 
     private static void FreeIfChildOf(Node? node, Node parent)

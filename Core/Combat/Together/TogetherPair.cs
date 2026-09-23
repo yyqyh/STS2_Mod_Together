@@ -3,11 +3,15 @@ using MegaCrit.Sts2.Core.Entities.Cards;
 using MegaCrit.Sts2.Core.Entities.Creatures;
 using MegaCrit.Sts2.Core.Entities.Players;
 using MegaCrit.Sts2.Core.Logging;
+using MegaCrit.Sts2.Core.Multiplayer;
+using MegaCrit.Sts2.Core.Multiplayer.Game;
 using MegaCrit.Sts2.Core.Runs;
 using Together.Core.Content;
 using Together.Core.Patches.Deck;
 using Together.Core.Settings;
 using Together.Core.Utils;
+using System.Text.Json;
+using STS2RitsuLib.Networking.Sidecar;
 
 namespace Together.Core.Combat;
 
@@ -56,7 +60,55 @@ internal static class TogetherPair
         AccessTools.FieldRefAccess<Player, CardPile>("<Deck>k__BackingField");
 
     /// <summary>本局是否已经成组（锚点 + 至少一个回声）。</summary>
-    public static bool IsActive => _anchor is not null && _echoes.Count > 0;
+    /// <summary>
+    /// 本局是否真的在"共用身体"：配对已武装（锚点 + ≥1 回声）**且这是联机局**。
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// 这里就是全 mod 的总闸门：镜像（血量/格挡/上限/能力/金币）、球位、召唤物、归属归一、
+    /// 事件并发保护、牌堆顺序归一……都只看这一个属性，所以判定写在这里、只写一次。
+    /// </para>
+    /// <para>
+    /// <b>为什么必须带"联机"这一条</b>：配对是按设计"非共生体局不清空"的（避免读档/重连时误清），
+    /// 于是<b>单人局里它可能还留着上一局联机的配对</b>——那时 `IsActive` 为真会让各种补丁去动单人局的数据，
+    /// 最典型就是"草蜢偷牌把上一局的玩家 creature 塞进 targets → 本体 NRE 崩溃"（实测 2026-09-23 11:28）。
+    /// 带上联机判定后，单人局一律不介入。
+    /// </para>
+    /// </remarks>
+    public static bool IsActive
+    {
+        get
+        {
+            if (_anchor is null || _echoes.Count == 0)
+            {
+                return false;
+            }
+
+            return RunManager.Instance?.NetService is { } net && net.Type.IsMultiplayer();
+        }
+    }
+
+    /// <summary>
+    /// 更严的"本局有效"判定：在 <see cref="IsActive" /> 之上再要求成员都还在**本局**的 Players 里
+    /// （排除"上一局的 Player 对象"残留）。需要"塞进本局数据"的地方（如草蜢扩 targets）用它。
+    /// </summary>
+    public static bool IsLive
+    {
+        get
+        {
+            if (!IsActive)
+            {
+                return false;
+            }
+
+            if (Members().FirstOrDefault()?.RunState is not { } state)
+            {
+                return false;
+            }
+
+            return Members().All(member => state.Players.Contains(member));
+        }
+    }
 
     public static Player? Anchor => _anchor;
 
@@ -195,6 +247,10 @@ internal static class TogetherPair
         {
             TogetherSettingsStore.RememberSymbioticRun(SeedOf(runState), picked.Select(p => p.NetId));
         }
+
+        // 把"本局成员名单"广播一次：读档/重连/新房间都会走 Arm，所以两端任何时刻拿到的是同一份。
+        // （草蜢偷牌的"能不能各偷一张"就靠这份名单两边对齐。）
+        RunMembersSync.Publish(picked.Select(p => p.NetId), isNewRun ? "run_armed_new" : "run_armed");
 
         Log.Info(
             $"[together] 共生体已激活：anchor={Describe(picked[0])} "
@@ -375,5 +431,141 @@ internal static class TogetherPair
         {
             return null;
         }
+    }
+}
+
+/// <summary>
+/// 「本局共生体成员名单」的同步：由 <b>Arm（配对完成）</b> 驱动，主机权威、sidecar 同步。
+/// </summary>
+/// <remarks>
+/// <para>
+/// 为什么不用 <c>SymbiosisMembers</c> 那份名单：它只在**选人界面**被写，进局后不重建、读档/重连时是空的
+/// （客户端还会在开始连接时清缓存）—— 生命周期和"本局配对"对不上，于是常常出现
+/// "本地=[1,1317…] 同步=[]"这种不一致（实测：草蜢偷牌的判据就是被它坑的）。
+/// </para>
+/// <para>
+/// 这里另开一个 topic，由 <see cref="TogetherPair.Arm" /> 在算出锚点+回声后发布一次：
+/// 读取路径（读档 / 重连 / 新房间）都会走 Arm，所以两端任何时刻拿到的都是同一份名单。
+/// </para>
+/// </remarks>
+internal static class RunMembersSync
+{
+    private const string Topic = "together.run_members";
+
+    private static readonly Lock Gate = new();
+
+    private static bool _initialized;
+
+    private static ulong[]? _remote;
+
+    /// <summary>远端（主机）发布的成员名单；没收到过返回 null。</summary>
+    public static ulong[]? Remote
+    {
+        get
+        {
+            Initialize();
+            lock (Gate)
+            {
+                return _remote;
+            }
+        }
+    }
+
+    public static void Initialize()
+    {
+        lock (Gate)
+        {
+            if (_initialized)
+            {
+                return;
+            }
+
+            _initialized = true;
+            RitsuLibSidecarConfigSyncService.RegisterTopic<string, string>(
+                Topic,
+                string.Empty,
+                (_, _) => false,
+                (state, _) => state);
+            RitsuLibSidecarConfigSyncService.TopicChanged += OnTopicChanged;
+        }
+    }
+
+    /// <summary>主机把本局成员名单广播出去（Arm 完成时调用）。</summary>
+    public static void Publish(IEnumerable<ulong> netIds, string reason)
+    {
+        Initialize();
+
+        if (RunManager.Instance?.NetService is not NetHostGameService host)
+        {
+            return;
+        }
+
+        try
+        {
+            var payload = string.Join(",", netIds);
+
+            lock (Gate)
+            {
+                _remote = Parse(payload);
+            }
+
+            RitsuLibSidecarConfigSyncService.PublishHostState(host, Topic, 0, $"{reason}:{payload}");
+        }
+        catch (Exception ex)
+        {
+            Main.Logger.Warn($"[together] 广播本局成员名单失败（{reason}）：{ex.Message}");
+        }
+    }
+
+    public static void ClearRemote()
+    {
+        lock (Gate)
+        {
+            _remote = null;
+        }
+    }
+
+    private static void OnTopicChanged(SidecarConfigTopicChangedEvent ev)
+    {
+        if (ev.Topic != Topic || RunManager.Instance?.NetService is not NetClientGameService)
+        {
+            return;
+        }
+
+        try
+        {
+            var payload = JsonSerializer.Deserialize<string>(ev.StateJson) ?? string.Empty;
+            var ids = Parse(payload);
+
+            lock (Gate)
+            {
+                _remote = ids;
+            }
+
+            Log.Info($"[together] run.members：收到主机名单 [{string.Join(",", ids ?? [])}]");
+        }
+        catch (Exception ex)
+        {
+            Main.Logger.Warn($"[together] 解析主机成员名单失败：{ex.Message}");
+        }
+    }
+
+    private static ulong[]? Parse(string payload)
+    {
+        if (string.IsNullOrWhiteSpace(payload))
+        {
+            return null;
+        }
+
+        var ids = new List<ulong>();
+        foreach (var part in payload.Split(',', StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (ulong.TryParse(part.Trim(), out var id) && id != 0UL)
+            {
+                ids.Add(id);
+            }
+        }
+
+        return ids.Count > 0 ? ids.ToArray() : null;
     }
 }

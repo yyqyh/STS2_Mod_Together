@@ -76,6 +76,58 @@ internal static class DeterministicCardOrder
     }
 
     /// <summary>按确定性键排序后的副本（用于"候选池"这类不该就地改的输入）。</summary>
+    /// <summary>
+    /// 归一之后再<b>确定性重排</b>：两端顺序仍然一模一样，但看起来是打乱的（同名卡不再总挨着）。
+    /// </summary>
+    /// <remarks>
+    /// 只用排序会让同名卡扎堆（卡组/弃牌堆一眼看去像被整理过）。这里在规范序的基础上用
+    /// <b>自己的 PRNG</b> 做 Fisher–Yates：种子 = 规范序内容（牌键）的 FNV-1a 哈希 + 牌堆类型，
+    /// 两端算出来必然相同 → 置换也相同；内容一变种子就变，顺序看起来就是不固定的随机序。
+    /// <b>绝不能用本体的 <c>Rng</c></b>：那会推进它的随机流、直接两端分叉。
+    /// </remarks>
+    public static void SortAndMix(CardPile? pile, string why)
+    {
+        if (pile is null)
+        {
+            return;
+        }
+
+        SortPile(pile, why);
+
+        var cards = CardsField(pile);
+        if (cards is null || cards.Count < 2)
+        {
+            return;
+        }
+
+        var seed = 0xcbf29ce484222325UL ^ (ulong)(int)pile.Type;
+        foreach (var card in cards)
+        {
+            foreach (var ch in SortKey(card))
+            {
+                seed = (seed ^ ch) * 0x100000001b3UL;
+            }
+        }
+
+        var state = seed;
+        for (var i = cards.Count - 1; i > 0; i--)
+        {
+            state = NextRandom(state);
+            var j = (int)(state % (ulong)(i + 1));
+            (cards[i], cards[j]) = (cards[j], cards[i]);
+        }
+    }
+
+    /// <summary>splitmix64：自带的小 PRNG（不碰本体随机流）。</summary>
+    private static ulong NextRandom(ulong state)
+    {
+        state += 0x9E3779B97F4A7C15UL;
+        var z = state;
+        z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9UL;
+        z = (z ^ (z >> 27)) * 0x94D049BB133111EBUL;
+        return z ^ (z >> 31);
+    }
+
     public static List<CardModel> SortedCopy(IEnumerable<CardModel>? cards)
     {
         return cards is null

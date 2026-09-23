@@ -7,29 +7,20 @@ using Together.Core.Utils;
 namespace Together.Core.Combat;
 
 /// <summary>
-/// 额外回合策略（项目决定）：<b>额外回合不清共享状态</b>。
+/// 额外回合策略（项目决定）：<b>额外回合不清共享状态</b>（佩尔之眼等）。
 /// </summary>
 /// <remarks>
 /// <para>
-/// 本体的 <c>Creature.AfterTurnStart</c> 会调 <c>ClearBlock()</c>，而额外回合（如 <c>PaelsEye</c>）
-/// 只会让拿到额外回合的那名玩家参与 <c>StartTurn</c>。共享血池下这意味着
-/// "p1 拿额外回合 → 把 p2 攒的格挡也一起清掉"。
+/// 本体 <c>Creature.AfterTurnStart</c> 会调 <c>ClearBlock()</c>，而额外回合只会让拿到额外回合的那个人参与
+/// StartTurn（<c>CombatManager.IsPartOfPlayerTurn</c> 对其他人返回 false）。共享格挡下这意味着
+/// "p1 拿额外回合 → 把 p2 攒的格挡也一起清掉"，所以规则是：<b>有玩家在打额外回合时不清共享格挡</b>。
 /// </para>
 /// <para>
-/// 判定用本体现成的 <c>CombatManager.IsPartOfPlayerTurn</c>：它明确写着
-/// "Returns false if some player is taking an extra turn, and it's not us"。
-/// 所以规则就是：<b>只有两人都参与本回合时才清共享格挡</b>。
-/// </para>
-/// <para>
-/// <b>另外这条还兼当"额外回合崩溃"的挡箭牌</b>：实测（2026-09-22 log）额外回合开始时会抛
-/// <c>NullReferenceException at Creature.AfterTurnStart(CombatSide)</c>（异常发生在该方法的同步段里，
-/// 也就是它调 <c>ClearBlock()</c> 的那一刻），把整个回合循环打死 → 战斗卡住。
-/// 所以这里有两条：① 有玩家在打额外回合时<b>整个跳过 AfterTurnStart</b>（等于不清共享格挡，正是本文件既定策略）；
-/// ② 两个 Prefix 都套 try/catch，任何意外都退回本体行为，绝不从我们的前缀里往外抛。
-/// </para>
-/// <para>
-/// 注意这条只覆盖格挡。持久状态的"回合数衰减"仍然会跟着额外回合多走一次
-/// （本体的能力衰减挂在回合结束，不在这里）。
+/// <b>跳过一个 async 方法，必须自己把 Task 还回去</b>：<c>AfterTurnStart</c> / <c>ClearBlock</c> 都是
+/// <c>async Task</c>，Harmony 前缀返回 false 时 <c>__result</c> 保持默认值 <c>null</c>，
+/// 调用方 <c>await</c> 一个 null Task 立刻 NRE —— 表现就是"额外回合刚开始，回合循环就死了、战斗卡住"
+/// （2026-09-22 log：<c>Combat #2 turn loop died … NullReferenceException at CombatManager.StartTurn</c>，
+/// 抛在 <c>await item3.AfterTurnStart(...)</c> 这一行）。所以下面两条都自己还 Task。
 /// </para>
 /// </remarks>
 [HarmonyPatch(typeof(Creature), nameof(Creature.AfterTurnStart))]
@@ -37,11 +28,18 @@ internal static class ExtraTurnSkipAfterTurnStartPatch
 {
     /// <summary>有人在打额外回合 → 这次 <c>AfterTurnStart</c> 整个不做（不清共享格挡，也避开本体在这条路径上的 NRE）。</summary>
     [HarmonyPrefix]
-    private static bool Prefix()
+    private static bool Prefix(ref Task __result)
     {
         try
         {
-            return CombatManager.Instance?.PlayersTakingExtraTurn.Count is not > 0;
+            if (CombatManager.Instance?.PlayersTakingExtraTurn.Count is not > 0)
+            {
+                return true;
+            }
+
+            CappedLog.Info("extra.turn", "额外回合：跳过 AfterTurnStart（共享格挡不清）");
+            __result = Task.CompletedTask;
+            return false;
         }
         catch (Exception ex)
         {
@@ -51,11 +49,12 @@ internal static class ExtraTurnSkipAfterTurnStartPatch
     }
 }
 
+/// <summary>额外回合（或组里有人不参与本回合）时，<c>ClearBlock</c> 不清共享格挡。</summary>
 [HarmonyPatch(typeof(Creature), "ClearBlock")]
 internal static class ExtraTurnNoBlockClearPatch
 {
     [HarmonyPrefix]
-    private static bool Prefix(Creature __instance)
+    private static bool Prefix(Creature __instance, ref Task __result)
     {
         try
         {
@@ -63,6 +62,7 @@ internal static class ExtraTurnNoBlockClearPatch
             if (CombatManager.Instance?.PlayersTakingExtraTurn.Count is > 0)
             {
                 CappedLog.Info("extra.turn", "额外回合：跳过清格挡（共享格挡不清）");
+                __result = Task.CompletedTask;
                 return false;
             }
 
@@ -76,6 +76,7 @@ internal static class ExtraTurnNoBlockClearPatch
             {
                 if (CombatManager.Instance?.IsPartOfPlayerTurn(other) is false)
                 {
+                    __result = Task.CompletedTask;
                     return false;
                 }
             }
