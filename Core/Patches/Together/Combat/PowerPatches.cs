@@ -1,5 +1,4 @@
 using System.Reflection;
-using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
 
 using HarmonyLib;
@@ -25,7 +24,8 @@ namespace Together.Core.Patches.Combat;
 /// 而 <c>CombatManager.RunAutoPrePlayPhase</c> 是<b>对每个玩家各派发一次</b>
 /// <c>Hook.AfterAutoPrePlayPhaseEntered</c>，于是 P2 回合开始时那次派发里
 /// <c>player</c> 参数正是 P1（卡的归属者）→ 同一张注能牌被自动打出<b>第二次</b>。
-/// 注意这和 <see cref="HookListenerDedupePatch" /> 修的不是同一件事：那边修的是"同一张牌在监听表里出现两次"
+/// 注意这和 <see cref="Together.Core.Patches.Combat.HookListenerDedupePatches" /> 修的不是同一件事：
+/// 那边修的是"同一张牌在监听表里出现两次"
 /// （共享牌堆导致同一口堆被两个玩家各收集一遍），这边是"监听表已经是一份，但两个玩家的
 /// pre-play 阶段各命中了同一个归属者"。所以看起来像旧问题复发，其实是另一条路径。
 /// </remarks>
@@ -35,8 +35,8 @@ internal static class ImbuedOncePerCombatPatch
     /// <summary>当前记的是哪一场战斗（换战斗即清空）。</summary>
     private static ICombatState? _combat;
 
-    /// <summary>本场战斗里已经自动打出过的注能牌（按对象引用）。</summary>
-    private static readonly HashSet<CardModel> Played = new(ReferenceComparer.Instance);
+    /// <summary>本场战斗里已经自动打出过的注能牌（按对象引用：同名牌是不同对象，不能按值去重）。</summary>
+    private static readonly HashSet<CardModel> Played = new(ReferenceEqualityComparer.Instance);
 
     [HarmonyPrefix]
     private static bool Prefix(Imbued __instance, Player player, ref Task __result)
@@ -77,21 +77,6 @@ internal static class ImbuedOncePerCombatPatch
         return false;
     }
 
-    /// <summary>引用相等的比较器（同名牌是不同对象，不能按值去重）。</summary>
-    private sealed class ReferenceComparer : IEqualityComparer<CardModel>
-    {
-        internal static readonly ReferenceComparer Instance = new();
-
-        public bool Equals(CardModel? x, CardModel? y)
-        {
-            return ReferenceEquals(x, y);
-        }
-
-        public int GetHashCode(CardModel obj)
-        {
-            return RuntimeHelpers.GetHashCode(obj);
-        }
-    }
 }
 
 /// <summary>"会改身体数值"的回合末能力（临时力量/敏捷/集中、虚弱/易伤/脆弱）：只由<b>原件</b>结算一次，

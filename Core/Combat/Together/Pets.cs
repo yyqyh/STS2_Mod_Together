@@ -70,22 +70,18 @@ internal static class PetSummonFanoutPatch
 /// <summary>召唤物（本体叫 pet，奥斯提是最典型的一只）的血量同步 + 给别的 mod 留的扩展点。</summary>
 /// <remarks>
 /// 本体召唤物是挂在玩家身上的 <see cref="Creature" />（<c>Creature.PetOwner</c> / <c>Player.Osty</c>），
-/// 靠"替你去死"这类能力<b>替主人接伤害</b>（<c>DieForYouPower.ModifyUnblockedDamageTarget</c>：
-/// 打向主人的<b>未格挡</b>伤害被改成打向召唤物）。共享身体下两个人各有一只同名召唤物，
-/// 而镜像原来只推"两个人自己的身体"，于是两边召唤物的血量各走各的（一边死了另一边还活着）。
-/// 这里把"召唤物 → 队友身上的同一只"的配对补进身体镜像：<c>BodyStatMirrorPatch</c> 一旦遇到 pet，
-/// 就把 当前生命 / 生命上限 推过去（本体的生死就是 <c>IsAlive =&gt; CurrentHp &gt; 0</c>，所以推到 0 即同步死亡）。
-/// 伤害 / 回血 / 加生命上限全都走 <c>set_CurrentHp</c> / <c>set_MaxHp</c>，正好是已有挂点，不用另加补丁。
-/// 不推格挡：pet 上显示的格挡是"主人的格挡"，本体自己会画。
-/// <b>【扩展点】其他 mod 角色的召唤物</b>：默认规则按"Monster 模型 ID + 同种序号"配对，
-/// 所以只要用的是本体这套 pet（<c>PlayerCmd.AddPet&lt;T&gt;</c>），<b>不注册也能同步</b>。特殊情形二选一：
-/// <c>SummonMirror.RegisterKeyRule("MyMod", c =&gt; c.Monster is MySummon ? "MySummon" : null,
-/// c =&gt; c.PetOwner ?? MyOwnerOf(c))</c> —— 给出"怎么认出是同一只"的键，以及"它属于谁"（键相同就配对）；
-/// <c>SummonMirror.RegisterPairing("MyMod", c =&gt; 队友身上对应的那只)</c> —— 完全自己决定配对，优先级最高。
-/// 请在 mod 初始化（注册内容）时注册这些规则，不要在战斗中途注册。
-/// <b>还没做的部分</b>：召唤是逐玩家的（一局里两个人各有一只 Osty）。如果只有一个人召出来了，
-/// 我们不会替另一边凭空造一只（那要重跑本体的召唤 + 钩子 + 界面流程），只在日志里留一条
-/// <c>summon.missing</c>。要不要做"召唤事件镜像"，等 log 说话。
+/// 靠"替你去死"这类能力<b>替主人接伤害</b>（<c>DieForYouPower.ModifyUnblockedDamageTarget</c>：打向主人的
+/// <b>未格挡</b>伤害被改成打向召唤物）。共享身体下两人各有一只同名召唤物，而镜像原来只推"两个人自己的身体"，
+/// 于是两边召唤物血量各走各的（一边死了另一边还活着）。这里把"召唤物 → 队友身上的同一只"补进身体镜像：
+/// <c>BodyStatMirrorPatch</c> 一遇到 pet 就把 当前生命 / 生命上限 推过去（本体生死就是
+/// <c>IsAlive =&gt; CurrentHp &gt; 0</c>，推到 0 即同步死亡），走的正是已有的 <c>set_CurrentHp</c> /
+/// <c>set_MaxHp</c> 挂点、不用另加补丁；不推格挡（pet 上的格挡是"主人的格挡"，本体自己会画）。
+/// <b>【扩展点】其他 mod 的召唤物</b>：默认按"Monster 模型 ID + 同种序号"配对，所以只要用本体这套 pet
+/// （<c>PlayerCmd.AddPet&lt;T&gt;</c>）<b>不注册也能同步</b>；要自定义就在 mod 初始化（注册内容）时调
+/// <c>SummonMirror.RegisterKeyRule(...)</c>（给"怎么认出同一只"的键 + 它属于谁）或
+/// <c>SummonMirror.RegisterPairing(...)</c>（完全自己配对，优先级最高）—— 别在战斗中途注册。
+/// <b>还没做的部分</b>：召唤是逐玩家的，只有一边召出来时我们不会替另一边凭空造一只（那要重跑本体的召唤 +
+/// 钩子 + 界面流程），只在日志里留一条 <c>summon.missing</c>。
 /// </remarks>
 public static class SummonMirror
 {

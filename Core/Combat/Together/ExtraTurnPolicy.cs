@@ -1,3 +1,5 @@
+using System.Reflection;
+
 using HarmonyLib;
 using MegaCrit.Sts2.Core.Combat;
 using MegaCrit.Sts2.Core.Entities.Creatures;
@@ -22,43 +24,17 @@ namespace Together.Core.Combat;
 /// 所以先用 <see cref="TogetherPair.IsActive" /> 把非配对局挡在外面 —— 否则单人局拿佩尔之眼时
 /// 额外回合不清格挡，那是偏离本体的。
 /// </remarks>
-[HarmonyPatch(typeof(Creature), nameof(Creature.AfterTurnStart))]
-internal static class ExtraTurnSkipAfterTurnStartPatch
+[HarmonyPatch]
+internal static class ExtraTurnPolicyPatches
 {
-    /// <summary>有人在打额外回合 → 这次 <c>AfterTurnStart</c> 整个不做（不清共享格挡，也避开本体在这条路径上的 NRE）。</summary>
-    [HarmonyPrefix]
-    private static bool Prefix(ref Task __result)
+    private static IEnumerable<MethodBase> TargetMethods()
     {
-        try
-        {
-            if (!TogetherPair.IsActive)
-            {
-                return true;
-            }
-
-            if (CombatManager.Instance?.PlayersTakingExtraTurn.Count is not > 0)
-            {
-                return true;
-            }
-
-            CappedLog.Info("extra.turn", "额外回合：跳过 AfterTurnStart（共享格挡不清）");
-            __result = Task.CompletedTask;
-            return false;
-        }
-        catch (Exception ex)
-        {
-            CappedLog.Info("extra.turn", $"额外回合判定失败，按本体行为继续：{ex.Message}");
-            return true;
-        }
+        yield return AccessTools.Method(typeof(Creature), nameof(Creature.AfterTurnStart));
+        yield return AccessTools.Method(typeof(Creature), "ClearBlock");
     }
-}
 
-/// <summary>额外回合（或组里有人不参与本回合）时，<c>ClearBlock</c> 不清共享格挡。</summary>
-[HarmonyPatch(typeof(Creature), "ClearBlock")]
-internal static class ExtraTurnNoBlockClearPatch
-{
     [HarmonyPrefix]
-    private static bool Prefix(Creature __instance, ref Task __result)
+    private static bool Prefix(object __instance, MethodBase __originalMethod, ref Task __result)
     {
         try
         {
@@ -67,15 +43,30 @@ internal static class ExtraTurnNoBlockClearPatch
                 return true;
             }
 
-            // 额外回合：一律不清（共享格挡两个人都在用）。
-            if (CombatManager.Instance?.PlayersTakingExtraTurn.Count is > 0)
+            var inExtraTurn = CombatManager.Instance?.PlayersTakingExtraTurn.Count is > 0;
+
+            // AfterTurnStart：有人在打额外回合就整个不做（不清共享格挡，也避开本体在这条路径上的 NRE）。
+            if (__originalMethod.Name == nameof(Creature.AfterTurnStart))
+            {
+                if (!inExtraTurn)
+                {
+                    return true;
+                }
+
+                CappedLog.Info("extra.turn", "额外回合：跳过 AfterTurnStart（共享格挡不清）");
+                __result = Task.CompletedTask;
+                return false;
+            }
+
+            // ClearBlock：额外回合一律不清（共享格挡两个人都在用）。
+            if (inExtraTurn)
             {
                 CappedLog.Info("extra.turn", "额外回合：跳过清格挡（共享格挡不清）");
                 __result = Task.CompletedTask;
                 return false;
             }
 
-            if (__instance.Player is not { } player)
+            if (__instance is not Creature { Player: { } player })
             {
                 return true;
             }
@@ -94,7 +85,7 @@ internal static class ExtraTurnNoBlockClearPatch
         }
         catch (Exception ex)
         {
-            CappedLog.Info("extra.turn", $"清格挡判定失败，按本体行为继续：{ex.Message}");
+            CappedLog.Info("extra.turn", $"{__originalMethod.Name} 的额外回合判定失败，按本体行为继续：{ex.Message}");
             return true;
         }
     }

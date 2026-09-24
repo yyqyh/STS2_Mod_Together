@@ -1,8 +1,5 @@
-using System.Reflection;
-
 using HarmonyLib;
 
-using MegaCrit.Sts2.Core.Combat;
 using MegaCrit.Sts2.Core.Commands;
 using MegaCrit.Sts2.Core.Entities.Cards;
 using MegaCrit.Sts2.Core.Entities.Creatures;
@@ -18,113 +15,61 @@ namespace Together.Core.Patches.Deck;
 
 /// <summary>"取牌"的确定性：<b>挂本体公共入口，不认具体是哪张牌</b>。</summary>
 /// <remarks>
-/// <b>弃牌堆 / 主卡组</b>：挂 <c>CardPile.AddInternal</c>（含 MoveToTop/Bottom），每次变动后保持规范序 ——
-/// 这两口堆的顺序在玩法上没有语义（全库没有"取弃牌堆顶 / 卡组第 N 张"的读法）；
-/// <b>打出抽牌堆</b>：挂 <c>CardPileCmd.AutoPlayFromDrawPile</c>（破灭 / 倾泻 / 无敌 / 混沌蒸馏药水…）；
-/// <b>StableShuffle 取牌</b>：靠 <c>DeterministicCardComparePatch</c> 把 <c>CardModel.CompareTo</c> 变成全序
-/// （横祸 / 乱战 / 寻者之击 / 能量电池…），不需要单独挂；
-/// <b>候选池</b>：挂 <c>CardFactory.GetDistinctForCombat</c>（攻击药水 / 发现一类）。
-/// <b>唯一例外</b>：<c>TakeRandom</c>（内部 UnstableShuffle）直接读<b>抽牌堆</b>的写法。抽牌堆不能保持规范序
-/// （本体抽牌就是取 <c>Cards[0]</c>，排了就变成永远按固定顺序抽牌）。全库目前只有受膏一张，见文件末尾；
-/// 以后新增这种写法（<c>TakeRandom</c> + 抽牌堆）grep 一下 <c>TakeRandom(</c> 再加一条。
+/// <b>本 mod 不重排任何牌堆</b>（弃牌堆 / 主卡组 / 抽牌堆都会原样保留，方便"控制牌堆顺序"的 mod 共存）。
+/// 只做两件不碰牌堆的事：<b>候选池</b>排序（挂 <c>CardFactory.GetDistinctForCombat</c>，排的是一次性副本），
+/// 以及 <c>DeterministicCardComparePatch</c>（本体的 <c>List.Sort</c> 排的也是副本）。
+/// 原来在"按堆序取牌"前的就地排序（破灭 / 倾泻 / 无敌 / 混沌蒸馏药水、受膏）已撤，
+/// 换成 <see cref="PileOrderProbe" /> 的只读指纹日志 —— 顺序漂了能看见，但不再被我们改写。
 /// </remarks>
 internal static class RandomPickOrder
 {
-    /// <summary>顺序<b>没有语义</b>的牌堆：可以一直保持规范序（只放弃牌堆与主卡组）。</summary>
-    /// <remarks>
-    /// 抽牌堆（抽牌取堆顶）、手牌（左右位置有意义）、
-    /// 消耗堆 / 打出堆（没人从里面随机取）都不碰。
-    /// </remarks>
-    private static bool IsOrderFreePile(PileType type)
-    {
-        return type is PileType.Discard or PileType.Deck;
-    }
-
-    /// <summary>牌堆变动后归一顺序（弃牌堆 / 主卡组）。</summary>
-    public static void NormalizeOrderFreePile(CardPile? pile, Player? player, string why)
-    {
-        if (pile is null || player is null)
-        {
-            return;
-        }
-
-        if (!TogetherPair.IsActive || !TogetherPair.IsMember(player))
-        {
-            return;
-        }
-
-        if (!IsOrderFreePile(pile.Type))
-        {
-            return;
-        }
-
-        // 主卡组只在**战斗进行中**归一：战斗里"随机取牌"才需要两端顺序一致；战斗外（事件房间等）
-        // 本体的"按下标读卡组"是有语义的 —— 镜子事件 Reflections 就是 Deck.Cards[i] 逐张复制整副牌，
-        // 我们一重排，它就一直在复制排在最前面那张（进阶之灾 → 40+ 张）。
-        // 顺带也让"选牌协议按 DeckIndex 解析"（NetDeckCard）在战斗外更稳（顺序不再被我们动）。
-        // 弃牌堆没有这种下标语义，维持一直归一。
-        if (pile.Type == PileType.Deck && CombatManager.Instance?.IsInProgress is not true)
-        {
-            return;
-        }
-
-        // 原来只做归一（同名卡会扎堆）；现在归一 + 确定性重排：两端一致，但看起来是随机序。
-        DeterministicCardOrder.SortAndMix(pile, why);
-    }
-
-    /// <summary>取牌之前把某口堆排成两端一致（只有明确知道"这口堆此刻只被随机读取"时才用）。</summary>
-    public static void SortBeforePick(Player? player, PileType type, string why)
+    /// <summary>只读探针：把某口堆"当前顺序"的指纹打进日志（<b>不改牌堆</b>）。</summary>
+    public static void Probe(Player? player, PileType type, string why)
     {
         if (player is null || !TogetherPair.IsActive || !TogetherPair.IsMember(player))
         {
             return;
         }
 
-        DeterministicCardOrder.SortPile(type.GetPile(player), why);
+        CardPile? pile;
+        try
+        {
+            pile = type.GetPile(player);
+        }
+        catch (Exception ex)
+        {
+            CappedLog.Info("order.probe", $"{type} 顺序指纹取不到（{why}）：{ex.GetType().Name}: {ex.Message}");
+            return;
+        }
+
+        CappedLog.Info(
+            "order.probe",
+            $"{type} 顺序指纹（{why}）：{DeterministicCardOrder.Fingerprint(pile?.Cards)}（两端应一致；不一致=顺序已漂）");
     }
 }
 
 // ======================================================================================
-// 1) 弃牌堆 / 主卡组：只要堆变了就归一顺序（覆盖所有"从这两口堆随机取"的效果）
+// 1) 打出抽牌堆：破灭 / 倾泻 / 无敌 / 混沌蒸馏药水 / 混乱之力…（只留指纹，不改顺序）
 // ======================================================================================
 
-/// <summary>堆变动（加牌 / 移到堆顶 / 移到堆底）之后归一顺序。</summary>
-[HarmonyPatch]
-internal static class PileOrderNormalizePatch
-{
-    private static IEnumerable<MethodBase> TargetMethods()
-    {
-        yield return AccessTools.Method(typeof(CardPile), nameof(CardPile.AddInternal));
-        yield return AccessTools.Method(typeof(CardPile), nameof(CardPile.MoveToTopInternal));
-        yield return AccessTools.Method(typeof(CardPile), nameof(CardPile.MoveToBottomInternal));
-    }
-
-    [HarmonyPostfix]
-    private static void Postfix(CardPile __instance, CardModel card, MethodBase __originalMethod)
-    {
-        RandomPickOrder.NormalizeOrderFreePile(__instance, card.Owner, __originalMethod.Name);
-    }
-}
-
-// ======================================================================================
-// 2) 打出抽牌堆：破灭 / 倾泻 / 无敌 / 混沌蒸馏药水 / 混乱之力…
-// ======================================================================================
-
-/// <summary>从抽牌堆自动打牌（<c>Top</c> / <c>Bottom</c> / <c>Random</c>）。</summary>
-/// <remarks><c>Top</c> 分支完全不消耗随机数，只按堆顺序取（<c>Cards.FirstOrDefault()</c>），
-/// 所以必须先把堆排齐，否则两端各打各的牌。</remarks>
+/// <summary>从抽牌堆自动打牌前，留一条抽牌堆顺序指纹。</summary>
+/// <remarks>
+/// <c>Top</c> 分支完全不消耗随机数、只按堆顺序取（<c>Cards.FirstOrDefault()</c>）—— 这是"顺序决定行为"的典型点，
+/// 所以两端顺序必须一致。我们<b>不再替它排齐</b>（那会覆盖控制牌堆的 mod），改成在这里留指纹：
+/// 若这一段行为两端不同，两份 log 一比就知道是不是顺序先漂的。
+/// </remarks>
 [HarmonyPatch(typeof(CardPileCmd), nameof(CardPileCmd.AutoPlayFromDrawPile))]
-internal static class AutoPlayFromDrawPileOrderPatch
+internal static class AutoPlayFromDrawPileProbePatch
 {
     [HarmonyPrefix]
     private static void Prefix(Player player, int count, CardPilePosition position)
     {
-        RandomPickOrder.SortBeforePick(player, PileType.Draw, $"自动打牌/{position}×{count}");
+        RandomPickOrder.Probe(player, PileType.Draw, $"自动打牌/{position}×{count}");
     }
 }
 
 // ======================================================================================
-// 3) 候选池：攻击药水 / 发现这类"生成随机候选"，TakeRandom 内部是 UnstableShuffle
+// 2) 候选池：攻击药水 / 发现这类"生成随机候选"，TakeRandom 内部是 UnstableShuffle
 // ======================================================================================
 
 /// <summary>战斗中的"生成随机候选牌"（攻击药水、发现一类）。</summary>
@@ -145,7 +90,7 @@ internal static class CardFactoryDistinctOrderPatch
 }
 
 // ======================================================================================
-// 4) 诊断：每次"自动打出某张牌"留一行，便于两份 log 对第一个分歧点
+// 3) 诊断：每次"自动打出某张牌"留一行，便于两份 log 对第一个分歧点
 // ======================================================================================
 
 /// <summary>每一次"自动打出某张牌"都留一行日志。</summary>
@@ -172,21 +117,20 @@ internal static class AutoPlayDiagnosticPatch
 }
 
 // ======================================================================================
-// 5) 例外：TakeRandom（= UnstableShuffle）直接读抽牌堆的牌
+// 4) TakeRandom（= UnstableShuffle）直接读抽牌堆的牌：受膏
 // ======================================================================================
 
-/// <summary>受膏（<c>ANOINTED</c>）：<c>TakeRandom</c> 从<b>抽牌堆</b>抽稀有牌进手牌。</summary>
+/// <summary>受膏（<c>ANOINTED</c>）：<c>TakeRandom</c> 从<b>抽牌堆</b>抽稀有牌进手牌（打指纹，不排堆）。</summary>
 /// <remarks>
-/// 抽牌堆不能一直保持规范序（抽牌就是取 <c>Cards[0]</c>），而 <c>TakeRandom</c> 是泛型扩展方法
-/// ——.NET 对引用类型实参只生成一份代码，挂上去会连累遗物抓包 / 地图生成（实测直接崩），
-/// 所以这一类只能挂在具体牌上。全库目前只有这一张。
+/// <c>TakeRandom</c> 是泛型扩展方法 —— .NET 对引用类型实参只生成一份代码，挂上去会连累遗物抓包 / 地图生成
+/// （实测直接崩），所以这类只能挂在具体牌上。全库目前只有这一张，以后新增就 grep <c>TakeRandom(</c> 再加一条。
 /// </remarks>
 [HarmonyPatch(typeof(Anointed), "OnPlay")]
-internal static class AnointedOrderPatch
+internal static class AnointedOrderProbePatch
 {
     [HarmonyPrefix]
     private static void Prefix(Anointed __instance)
     {
-        RandomPickOrder.SortBeforePick(__instance.Owner, PileType.Draw, "受膏");
+        RandomPickOrder.Probe(__instance.Owner, PileType.Draw, "受膏");
     }
 }

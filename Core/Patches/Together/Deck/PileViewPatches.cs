@@ -9,6 +9,7 @@ using MegaCrit.Sts2.Core.Models;
 using MegaCrit.Sts2.Core.Nodes.Combat;
 using MegaCrit.Sts2.Core.Nodes.TopBar;
 using Together.Core.Combat;
+using Together.Core.Utils;
 
 namespace Together.Core.Patches.Deck;
 
@@ -33,12 +34,6 @@ internal static class PileCountSync
 
     /// <summary>已登记的 UI 节点 →（它盯着的牌堆，以及怎么刷新它）。</summary>
     private static readonly List<Entry> Entries = [];
-
-    /// <summary>字段缓存。键必须带<b>字段名</b>：同一类型上要读三个字段，只用类型当键会拿回上一个 <c>FieldInfo</c>
-    /// （实测报 <c>Object of type 'System.Int32' cannot be converted to type 'CardPile'</c>，整条刷新静默失效）。</summary>
-    private static readonly Dictionary<(Type Type, string Name), FieldInfo?> FieldCache = [];
-
-    private static readonly Dictionary<(Type Type, string Name), MethodInfo?> MethodCache = [];
 
     private static bool _warned;
 
@@ -184,53 +179,18 @@ internal static class PileCountSync
 
     private static FieldInfo? FieldOf(Type type, string name)
     {
-        var key = (type, name);
-        if (FieldCache.TryGetValue(key, out var cached))
-        {
-            return cached;
-        }
-
-        FieldInfo? field;
-        try
-        {
-            field = AccessTools.Field(type, name);
-        }
-        catch (Exception)
-        {
-            field = null;
-        }
-
+        var field = ModelAccess.FieldOf(type, name);
         if (field is null)
         {
             WarnOnce($"读不到 {type.Name}.{name}：本体改过这个字段，牌堆计数即时刷新会失效。");
         }
 
-        FieldCache[key] = field;
         return field;
     }
 
     private static MethodInfo? MethodOf(Type type, string name, params Type[] parameters)
     {
-        var key = (type, name);
-        if (MethodCache.TryGetValue(key, out var cached))
-        {
-            return cached;
-        }
-
-        MethodInfo? method;
-        try
-        {
-            method = parameters.Length == 0
-                ? AccessTools.Method(type, name)
-                : AccessTools.Method(type, name, parameters);
-        }
-        catch (Exception)
-        {
-            method = null;
-        }
-
-        MethodCache[key] = method;
-        return method;
+        return ModelAccess.MethodOf(type, name, parameters);
     }
 
     /// <summary>只警告一次（这些调用点都在"每张牌进出牌堆"的热路径上，出问题会一瞬间刷上千行日志）。</summary>
@@ -337,7 +297,7 @@ internal static class CardPileLookupPatch
             return;
         }
 
-        foreach (var other in TogetherPair.OthersOf(OwnerOf(__instance)))
+        foreach (var other in TogetherPair.OthersOf(ModelAccess.OwnerOf(__instance)))
         {
             foreach (var pile in other.Piles)
             {
@@ -350,16 +310,4 @@ internal static class CardPileLookupPatch
         }
     }
 
-    /// <summary><c>Owner</c> 的 getter 会 AssertMutable，对 canonical 模型会抛，所以兜一层。</summary>
-    private static Player? OwnerOf(CardModel card)
-    {
-        try
-        {
-            return card.Owner;
-        }
-        catch (Exception)
-        {
-            return null;
-        }
-    }
 }

@@ -19,28 +19,19 @@ using Together.Core.Utils;
 
 namespace Together.Core.Combat;
 
-/// <summary>
-/// 球位（orb，故障机器人的那套）共享：两名成员用<b>同一口</b> OrbQueue，
-/// 容量 = 各成员基础球位之和（两个故障机器人 = 3 + 3 = 6 格）。
-/// </summary>
+/// <summary>球位（orb，故障机器人的那套）共享：两名成员用<b>同一口</b> OrbQueue，
+/// 容量 = 各成员基础球位之和（两个故障机器人 = 3 + 3 = 6 格）。</summary>
 /// <remarks>
 /// 本体球位是逐玩家的（<c>PlayerCombatState.OrbQueue</c>，容量初值来自 <c>Player.BaseOrbSlotCount</c>，
-/// 故障机器人 3；DLC/其他 mod 角色也一样走这个字段）。做法和"共享卡组"同一套：
-/// <b>把回声那份队列字段直接换成锚点那一份</b>。本体的
-/// <c>OrbCmd.AddOrb / Evoke / AddSlots / RemoveSlots</c> 全都是走 <c>player.PlayerCombatState.OrbQueue</c>，
-/// 换完两端天然操作同一口队列；界面（<c>NOrbManager</c>）也是现读 <c>Player.PlayerCombatState.OrbQueue</c>，
-/// 所以两边的球位显示都会变成这条共享队列。之后再把容量补成"各成员基础球位之和"。
-/// <b>唯一的坑</b>：球位有两个"每回合触发一次"的钩子 —— <c>AfterTurnStart</c>（回合开始：闪电/等离子等被动）
-/// 和 <c>BeforeTurnEnd</c>（回合结束：冰球给格挡等），本体是<b>逐玩家</b>调用的
-/// （<c>CombatManager.StartTurn</c> 里 foreach playersStartingTurn、<c>DoTurnEnd</c> 里 per player）。
-/// 队列共享之后回响那次会撞在同一口队列上 → 全部双倍触发。
-/// 所以这两条各加一个前缀：<b>只让队列主人（锚点）那一次跑</b>，回响那次直接跳过（异步方法还得自己还 Task）。
-/// 判定用本体现成的 <c>HookPlayerChoiceContext.Owner</c>，两端算出来一致。
-/// 上限：本体每口队列写死 10 格（<c>OrbQueue.maxCapacity</c> + <c>OrbCmd.AddSlots</c> 里的夹取），
-/// 共享局改成 <b>10 × 有球位的成员数</b>（两个故障机器人 = 20），见 <see cref="CapacityCap" />。
-/// <b>界面</b>：本体的球位界面（<c>NOrbManager</c>）不是每帧读队列，而是<b>按节点增量画</b>的
-/// （<c>AddOrbAnim</c> 只给"这次抽球的那个人"的节点加球）。所以队列共享之后，回声那侧窗口不会自己
-/// 长出球来 —— 这里在队列一变时于本帧末按共享队列重建每个成员的球位节点（已经一致的不动，保住本体动画）。
+/// 故障机器人 3；其他角色/mod 也一样走这个字段）。做法和"共享卡组"同源：<b>把回声那份队列字段直接换成锚点那一份</b>
+/// —— 本体的 <c>OrbCmd.AddOrb / Evoke / AddSlots / RemoveSlots</c> 与界面 <c>NOrbManager</c> 都现读
+/// <c>player.PlayerCombatState.OrbQueue</c>，换完两端天然操作 / 显示同一口队列；容量随后补成"各成员基础球位之和"。
+/// <b>唯一的坑</b>：<c>AfterTurnStart</c>（闪电/等离子被动）与 <c>BeforeTurnEnd</c>（冰球给格挡）本体是<b>逐玩家</b>
+/// 调用的，队列共享后回响那次会撞在同一口队列上 → 双倍触发；所以这两条各加一个前缀，<b>只让队列主人（锚点）跑一次</b>
+/// （异步方法还得自己还 Task），判定用本体现成的 <c>HookPlayerChoiceContext.Owner</c>。
+/// 上限：本体每口队列写死 10 格，共享局改成 <b>10 × 有球位的成员数</b>，见 <see cref="CapacityCap" />。
+/// <b>界面</b>：<c>NOrbManager</c> 不是每帧读队列，而是<b>按节点增量画</b>的（<c>AddOrbAnim</c> 只给"这次抽球的
+/// 那个人"加球），所以回声那侧不会自己长出球来 —— 见 <see cref="OrbVisualMirrorPatch" />。
 /// </remarks>
 internal static class OrbSlotSharing
 {
@@ -342,11 +333,12 @@ internal static class OrbRelinkOnTurnStartPatch
     }
 }
 
-/// <summary>球位动画镜像：本体给"这次操作的那个人"放动画时，同一套动画也放到其他成员节点上。</summary>
+/// <summary>球位界面的两个收口：① 动画镜像（本体只给"这次操作的那个人"放动画）；
+/// ② 激发动画的保险（节点图像与共享队列不同步时本体必抛，见下）。</summary>
 /// <remarks>
-/// 也在这里给 <c>EvokeOrbAnim</c> 加一道保险：本体是 <c>_orbs.Last(n =&gt; n.Model == orb)</c>，节点图像一旦和
-/// 共享队列不同步就会抛 <c>Sequence contains no matching element</c> 把整个回合循环打死
-/// （实测 20:45 log：破损核心开局给球、队列满触发激发时就是这么崩的）。
+/// 保险那条：<c>EvokeOrbAnim</c> 里是 <c>_orbs.Last(n =&gt; n.Model == orb)</c>，找不到就抛
+/// <c>Sequence contains no matching element</c> 把整个回合循环打死（实测 20:45 log：破损核心开局给球、
+/// 队列满触发激发时就是这么崩的）——补不上就跳过这一次动画，数据层已经激发完了。
 /// </remarks>
 [HarmonyPatch]
 internal static class OrbVisualMirrorPatch
@@ -366,16 +358,15 @@ internal static class OrbVisualMirrorPatch
         OrbSlotSharing.MirrorAnim(__instance, __originalMethod.Name, __args);
     }
 
-}
-
-/// <summary>激发动画的保险：<c>EvokeOrbAnim</c> 里 <c>_orbs.Last(n =&gt; n.Model == orb)</c> 找不到就抛
-/// <c>Sequence contains no matching element</c>、打死回合循环；补不上就跳过这一次动画（数据层已激发完）。</summary>
-[HarmonyPatch(typeof(NOrbManager), nameof(NOrbManager.EvokeOrbAnim), new[] { typeof(OrbModel) })]
-internal static class OrbEvokeAnimGuardPatch
-{
     [HarmonyPrefix]
-    private static bool Prefix(NOrbManager __instance, OrbModel orb)
+    private static bool Prefix(NOrbManager __instance, MethodBase __originalMethod, object[] __args)
     {
+        // 只给激发那条上保险；其余四个挂点（加球/清球/加位/减位）走本体的 Postfix 镜像。
+        if (__originalMethod.Name != nameof(NOrbManager.EvokeOrbAnim) || __args is not [OrbModel orb])
+        {
+            return true;
+        }
+
         try
         {
             if (OrbSlotSharing.HasOrbNode(__instance, orb))

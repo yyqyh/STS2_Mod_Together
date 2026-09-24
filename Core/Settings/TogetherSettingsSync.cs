@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Text.Json;
 
 using HarmonyLib;
@@ -239,29 +240,25 @@ internal static class TogetherSettingsSync
         bool ShareGold);
 }
 
-/// <summary>主机开 ENet 服（直连）时广播一次。</summary>
-[HarmonyPatch(typeof(NetHostGameService), nameof(NetHostGameService.StartENetHost))]
-internal static class HostStartENetSettingsSyncPatch
+/// <summary>主机开服（ENet 直连 / Steam）时广播一次设置，并清掉上一局的大厅成员名单。</summary>
+[HarmonyPatch]
+internal static class HostStartSettingsSyncPatch
 {
-    [HarmonyPrefix]
-    private static void Prefix(NetHostGameService __instance)
+    private static IEnumerable<MethodBase> TargetMethods()
     {
-        TogetherSettingsSync.PublishHostSettings(__instance, "start_enet_host");
-
-        // 新大厅开始：清掉上一局的共生体成员，并把空名单广播出去。
-        SymbiosisMembers.Reset(__instance, "start_enet_host");
+        yield return AccessTools.Method(typeof(NetHostGameService), nameof(NetHostGameService.StartENetHost));
+        yield return AccessTools.Method(typeof(NetHostGameService), nameof(NetHostGameService.StartSteamHost));
     }
-}
 
-/// <summary>主机开 Steam 服时广播一次。</summary>
-[HarmonyPatch(typeof(NetHostGameService), nameof(NetHostGameService.StartSteamHost))]
-internal static class HostStartSteamSettingsSyncPatch
-{
     [HarmonyPrefix]
-    private static void Prefix(NetHostGameService __instance)
+    private static void Prefix(NetHostGameService __instance, MethodBase __originalMethod)
     {
-        TogetherSettingsSync.PublishHostSettings(__instance, "start_steam_host");
-        SymbiosisMembers.Reset(__instance, "start_steam_host");
+        var reason = __originalMethod.Name == nameof(NetHostGameService.StartENetHost)
+            ? "start_enet_host"
+            : "start_steam_host";
+
+        TogetherSettingsSync.PublishHostSettings(__instance, reason);
+        SymbiosisMembers.Reset(__instance, reason);
     }
 }
 
@@ -277,24 +274,30 @@ internal static class HostPeerReadySettingsSyncPatch
     }
 }
 
-/// <summary>客户端开始连接前，先把上一局缓存的主机设置清掉。</summary>
-[HarmonyPatch(typeof(NetClientGameService), nameof(NetClientGameService.Initialize))]
-internal static class ClientInitializeSettingsResetPatch
+/// <summary>客户端"开始连接"与"断开连接"都要清掉上一局缓存的主机设置与成员名单。</summary>
+/// <remarks>两个时机各挂前缀与后缀各一次：清空是幂等的，宁可多清一次，也不去猜本体在这个方法里会不会读缓存。</remarks>
+[HarmonyPatch]
+internal static class ClientResetSettingsSyncPatch
 {
+    private static IEnumerable<MethodBase> TargetMethods()
+    {
+        yield return AccessTools.Method(typeof(NetClientGameService), nameof(NetClientGameService.Initialize));
+        yield return AccessTools.Method(typeof(NetClientGameService), nameof(NetClientGameService.OnDisconnectedFromHost));
+    }
+
     [HarmonyPrefix]
     private static void Prefix()
     {
-        TogetherSettingsSync.ClearRemote();
-        SymbiosisMembers.ClearRemote();
+        Clear();
     }
-}
 
-/// <summary>客户端与主机断开后同样清掉。</summary>
-[HarmonyPatch(typeof(NetClientGameService), nameof(NetClientGameService.OnDisconnectedFromHost))]
-internal static class ClientDisconnectedSettingsResetPatch
-{
     [HarmonyPostfix]
     private static void Postfix()
+    {
+        Clear();
+    }
+
+    private static void Clear()
     {
         TogetherSettingsSync.ClearRemote();
         SymbiosisMembers.ClearRemote();

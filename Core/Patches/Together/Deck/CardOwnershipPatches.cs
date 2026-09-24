@@ -71,18 +71,6 @@ internal static class CardOwnershipImpl
         card.GiveToAnotherPlayer(handOwner);
     }
 
-    private static Player? OwnerOf(CardModel card)
-    {
-        try
-        {
-            return card.Owner;
-        }
-        catch (Exception)
-        {
-            return null;
-        }
-    }
-
     /// <summary>手牌堆没有被共享，所以"这个 Hand 属于谁"是唯一的。</summary>
     internal static Player? HandOwnerOf(IRunState runState, CardPile pile)
     {
@@ -120,22 +108,17 @@ internal static class CardOwnerSinglePatch
     }
 }
 
-/// <summary>
-/// 打掉批量 <c>CardPileCmd.Add</c> 里那条"同批 owner 必须一致"的校验，让共享牌堆里的牌保持<b>自然归属</b>。
-/// </summary>
+/// <summary>打掉批量 <c>CardPileCmd.Add</c> 里那条"同批 owner 必须一致"的校验，让共享牌堆里的牌保持<b>自然归属</b>。</summary>
 /// <remarks>
-/// <b>配对局里这条是必须装上的</b>。那条校验的前提是"每个玩家的牌堆各自独立"：共享牌库下，
-/// 共享的弃牌堆／抽牌堆本来就该同时装着两个人的牌，而<b>洗牌</b>正是"把弃牌堆混进抽牌堆"的批量 Add ——
-/// 一旦抛 <c>…different owners…</c>，<b>回合循环直接终止、战斗卡住</b>。
-/// 曾经的临时办法是"把共享堆里牌的 owner 统一改成锚点"去迎合这条校验，效果是连带出两个问题：
-/// <b>幽灵卡</b>（<c>CardModel.Pile</c> 按 owner 反查堆，owner 被改写之后反查失效）、
-/// <b>变牌失败</b>（<c>CardCmd.Transform</c> 要求替换卡与原卡 owner 一致）、
-/// <b>"我的牌"判据集体失效</b>（金纸/卡戎之灰/探戈/绷带……全按 <c>card.Owner</c> 认领，归一后算到锚点头上）。
-/// 所以归一路线已经撤掉，这里让这条校验失效即为其正解。
-/// <b>关键点（上一版失败的原因）</b>：<c>Add</c> 是 <c>async</c> 方法，Harmony 的 transpiler
-/// 默认打在<b>存根</b>上（只有"创建状态机"那几条指令），真实代码在编译器生成的
-/// <c>CardPileCmd+&lt;Add&gt;d__N.MoveNext</c> 里。所以必须显式把目标指到状态机的 <c>MoveNext</c>。
-/// （日志里能看到别的 mod 也在打 <c>&lt;Add&gt;d__10.MoveNext</c>，佐证了这一点。）
+/// <b>配对局里必须装上</b>：那条校验的前提是"每个玩家的牌堆各自独立"，而共享牌库下共享的弃牌堆/抽牌堆本来就该
+/// 同时装着两个人的牌，<b>洗牌</b>正是"把弃牌堆混进抽牌堆"的批量 Add —— 一旦抛 <c>…different owners…</c>，
+/// <b>回合循环直接终止、战斗卡住</b>。
+/// 曾经的临时办法（把共享堆里牌的 owner 统一改成锚点）连带出三个问题：<b>幽灵卡</b>（<c>CardModel.Pile</c> 按
+/// owner 反查堆）、<b>变牌失败</b>（<c>CardCmd.Transform</c> 要求替换卡与原卡 owner 一致）、<b>"我的牌"判据集体
+/// 失效</b>（金纸/卡戎之灰/探戈/绷带……全按 <c>card.Owner</c> 认领）—— 所以归一路线已撤掉，让校验失效才是正解。
+/// <b>关键点（上一版失败的原因）</b>：<c>Add</c> 是 <c>async</c>，Harmony 的 transpiler 默认打在<b>存根</b>上
+/// （只有"创建状态机"那几条指令），真实代码在编译器生成的 <c>CardPileCmd+&lt;Add&gt;d__N.MoveNext</c> 里，
+/// 所以必须显式把目标指到状态机的 <c>MoveNext</c>（日志里能看到别的 mod 也在打 <c>&lt;Add&gt;d__10.MoveNext</c>）。
 /// </remarks>
 [HarmonyPatch]
 internal static class DifferentOwnersCheckPatch
@@ -154,7 +137,7 @@ internal static class DifferentOwnersCheckPatch
             }
 
             var moveNext = AccessTools.Method(nested, "MoveNext");
-            if (moveNext is not null && ContainsFragment(moveNext))
+            if (moveNext is not null && ModelAccess.ContainsStringConstant(moveNext, MessageFragment))
             {
                 return moveNext;
             }
@@ -163,36 +146,6 @@ internal static class DifferentOwnersCheckPatch
         throw new InvalidOperationException(
             $"在 CardPileCmd 的所有内嵌状态机里都没找到含 \"{MessageFragment}\" 的 MoveNext。" +
             "本体可能改过这条校验（或它不在状态机里），请重新核对后再启用本补丁。");
-    }
-
-    /// <summary>粗查：这条方法的 IL 里是否出现目标字符串（用于挑出正确的状态机）。</summary>
-    private static bool ContainsFragment(MethodBase method)
-    {
-        try
-        {
-            var body = method.GetMethodBody();
-            if (body is null)
-            {
-                return false;
-            }
-
-            foreach (var instruction in PatchProcessor.GetCurrentInstructions(method, out _)
-                         ?? Enumerable.Empty<CodeInstruction>())
-            {
-                if (instruction.opcode == OpCodes.Ldstr
-                    && instruction.operand is string text
-                    && text.Contains(MessageFragment, StringComparison.OrdinalIgnoreCase))
-                {
-                    return true;
-                }
-            }
-        }
-        catch (Exception)
-        {
-            // 读不出 IL 就当没找到。
-        }
-
-        return false;
     }
 
     [HarmonyTranspiler]
@@ -239,24 +192,17 @@ internal static class DifferentOwnersCheckPatch
     }
 }
 
-/// <summary>
-/// 手牌归属不变量：<b>在谁手里就归谁</b>。
-/// </summary>
+/// <summary>手牌归属不变量：<b>在谁手里就归谁</b>。</summary>
 /// <remarks>
-/// 为什么要在数据层强制这件事：本体不少"手牌类"效果是拿<b>卡牌自己的 owner</b> 去推
-/// "这是谁的手牌 / 该谁抽牌"的。例如 <c>CalculatedGamble</c>（计算下注）里
-/// <c>PileType.Hand.GetPile(base.Owner).Cards</c> 取的是 owner 的手牌，
-/// 而 <c>CardCmd.DiscardAndDraw</c> 干脆用 <c>discardCards[0].Owner</c> 决定"谁抽牌"。
-/// 一旦手牌里混进 owner 不是手牌主人的牌（读档恢复、效果搬运等路径都可能这样），
-/// 就会出现"p2 打计算下注，却把 p1 的手牌弃掉、并让 p1 抽牌"这种错位 ——
-/// 表现就是"p2 的计算下注不能正确抽牌"。
-/// 修法是在牌<b>进手牌</b>的那一刻（<c>CardPile.AddInternal</c>）就把 owner 对齐到该手牌的主人。
-/// 这里是原地改 owner、<b>不</b>像 <see cref="CardOwnershipImpl.NormalizeForHand" /> 那样先摘牌：
-/// 牌已经躺在这口手牌里了，新主人的堆集合里就有这口堆，<c>card.Pile</c> 依然找得到它，
-/// 不会出现"牌同时挂在两处"。
-/// 这是<b>唯一</b>还在改写 owner 的地方：离手之后一律保留自然归属（"这张牌是谁的"）。
-/// 共享堆因此会同时装着两个人的牌，批量 <c>CardPileCmd.Add</c> 的那条同 owner 校验由
-/// <see cref="DifferentOwnersCheckPatch" /> 打掉。
+/// 本体不少"手牌类"效果拿<b>卡牌自己的 owner</b> 去推"这是谁的手牌 / 该谁抽牌"：<c>CalculatedGamble</c>
+/// （计算下注）用 <c>PileType.Hand.GetPile(base.Owner).Cards</c>，<c>CardCmd.DiscardAndDraw</c> 干脆用
+/// <c>discardCards[0].Owner</c> 决定"谁抽牌"。手牌里一旦混进 owner 不是手牌主人的牌（读档恢复、效果搬运都可能），
+/// 就会出现"p2 打计算下注却弃掉 p1 的手牌、让 p1 抽牌"这种错位。
+/// 修法是在牌<b>进手牌</b>那一刻（<c>CardPile.AddInternal</c>）原地把 owner 对齐到手牌主人 —— <b>不</b>像
+/// <see cref="CardOwnershipImpl.NormalizeForHand" /> 那样先摘牌：牌已经躺在这口手牌里，新主人的堆集合里就有它，
+/// <c>card.Pile</c> 依然找得到，不会"牌同时挂在两处"。
+/// 这是<b>唯一</b>还在改写 owner 的地方；离手后一律保留自然归属（共享堆因此同时装着两人的牌，批量 Add 的
+/// 同 owner 校验由 <see cref="DifferentOwnersCheckPatch" /> 打掉）。
 /// </remarks>
 [HarmonyPatch(typeof(CardPile), nameof(CardPile.AddInternal))]
 internal static class HandOwnershipInvariantPatch
@@ -288,27 +234,18 @@ internal static class HandOwnershipInvariantPatch
     }
 }
 
-/// <summary>
-/// "从共享堆拿牌回手"这一类效果的归属修正。
-/// </summary>
+/// <summary>"从共享堆拿牌回手"这一类效果的归属修正。</summary>
 /// <remarks>
-/// 症状：捏奥之怒（NeowsFury）/挖掘（Dredge）/全息影像（Hologram）等从弃牌堆选牌回手时，
-/// 弃牌堆确实少了几张，但牌<b>没有进自己的手牌</b>。
-/// 原因：这类效果的目标手牌是本体<b>用卡牌自己的 owner 推出来的</b> ——
-/// CardPileCmd.Add(cards, PileType.Hand, …) 内部走的是
-/// <c>PileType.Hand.GetPile(cards.First().Owner)</c>。
-/// 而共享牌堆里的牌保留的是<b>自然归属</b>，它不等于"此刻正在操作这批牌的人"：
-/// 回声打这类牌时，<c>cards.First().Owner</c> 可能是锚点（或别的成员）→ 目标被推成<b>别人的手牌</b>：
-/// 牌从回声的屏幕上消失，却跑进另一个人手里去了。
-/// （反过来若进了自己的手但 owner 不是自己，界面又会因为 LocalContext.IsMe(card.Owner)
-/// 不为真而不给这张牌建手牌节点 —— 同样是"看不见"。）
-/// 解法：在搬运之前，把这批"从共享堆回手"的牌先改成<b>当前正在结算效果的那名玩家</b>，
-/// 本体随后用 owner 推出的目标手牌就是他自己那口。判定"正在结算效果的人"用本体自己的
-/// CombatManager.BeginCardOrPotionEffect / EndCardOrPotionEffect 深度计数
-/// （它就在 finally 里配对，比我们自己去挂"开始出牌/结束出牌"稳），
-/// 再要求两名配对玩家中<b>只有一个人</b>在执行效果 —— 嵌套效果（两个都在执行）时不猜，保持原版行为。
-/// 只改 <c>PileType.Hand</c> 这一类目标：其余堆（抽/弃/消耗/出牌/卡组）在配对里本来就是同一份，
-/// 用谁当 owner 推出来的都是同一个堆，没必要碰。
+/// 症状：捏奥之怒（NeowsFury）/挖掘（Dredge）/全息影像（Hologram）等从弃牌堆选牌回手时，弃牌堆确实少了几张，
+/// 但牌<b>没有进自己的手牌</b>。原因：目标手牌是本体<b>用卡牌自己的 owner 推出来的</b>
+/// （<c>CardPileCmd.Add(cards, PileType.Hand, …)</c> 内部走 <c>Hand.GetPile(cards.First().Owner)</c>），
+/// 而共享堆里的牌保留的是<b>自然归属</b>，不等于"此刻正在操作这批牌的人"：回声打这类牌时 owner 可能是锚点 →
+/// 目标被推成<b>别人的手牌</b>（牌从自己屏幕上消失、跑进别人手里）；反过来若进了自己手但 owner 不是自己，
+/// 界面又会因为 <c>LocalContext.IsMe(card.Owner)</c> 不为真而不给它建手牌节点 —— 同样是"看不见"。
+/// 解法：搬运之前先把这批牌改成<b>当前正在结算效果的那名玩家</b>。"谁在结算"用本体的
+/// <c>CombatManager.BeginCardOrPotionEffect / EndCardOrPotionEffect</c> 深度计数（它在 finally 里配对，
+/// 比自己挂"开始出牌/结束出牌"稳），且要求组里<b>只有一个人</b>在执行 —— 嵌套效果时不猜，保持原版行为。
+/// 只改 <c>PileType.Hand</c>：其余堆（抽/弃/消耗/出牌/卡组）在配对里本来就是同一份。
 /// </remarks>
 internal static class HandReturnOwnership
 {
@@ -382,7 +319,7 @@ internal static class HandReturnOwnership
         // 只要有一张正在别人手里，就整批不动 —— 那说明这不是"从共享堆回手"这条路径。
         foreach (var card in cards)
         {
-            if (PileOf(card) is not { } pile)
+            if (ModelAccess.PileOf(card) is not { } pile)
             {
                 return false;
             }
@@ -420,7 +357,7 @@ internal static class HandReturnOwnership
     /// </remarks>
     public static void NormalizeIntoHand(CardModel card, CardPile hand)
     {
-        if (PileOf(card) is { Type: PileType.Hand })
+        if (ModelAccess.PileOf(card) is { Type: PileType.Hand })
         {
             return;
         }
@@ -428,17 +365,6 @@ internal static class HandReturnOwnership
         CardOwnershipImpl.NormalizeForHand(card, hand);
     }
 
-    private static CardPile? PileOf(CardModel card)
-    {
-        try
-        {
-            return card.Pile;
-        }
-        catch (Exception)
-        {
-            return null;
-        }
-    }
 }
 
 /// <summary>记录"最近一次从战斗牌堆里选牌的是谁、选的是哪个堆"。</summary>
@@ -471,7 +397,7 @@ internal static class SelectedFromPile
 
         foreach (var card in cards)
         {
-            if (!ReferenceEquals(PileOf(card), _pile))
+            if (!ReferenceEquals(ModelAccess.PileOf(card), _pile))
             {
                 return null;
             }
@@ -480,17 +406,6 @@ internal static class SelectedFromPile
         return _player;
     }
 
-    private static CardPile? PileOf(CardModel card)
-    {
-        try
-        {
-            return card.Pile;
-        }
-        catch (Exception)
-        {
-            return null;
-        }
-    }
 }
 
 /// <summary>记下"谁从哪个堆里选牌"，供 <see cref="SelectedFromPile" /> 查询。</summary>
@@ -518,92 +433,71 @@ internal static class SelectedFromPilePatch
     }
 }
 
-/// <summary>单张：<c>Add(card, PileType.Hand)</c>（全息影像、重磅出击等）。</summary>
-[HarmonyPatch(
-    typeof(CardPileCmd),
-    nameof(CardPileCmd.Add),
-    new[] { typeof(CardModel), typeof(PileType), typeof(CardPilePosition), typeof(AbstractModel), typeof(bool) })]
-internal static class HandReturnSingleTypePatch
+/// <summary>"从共享堆回手"的三个 <c>CardPileCmd.Add</c> 重载：单张 / 批量给堆类型 / 批量给具体手牌堆。</summary>
+/// <remarks>
+/// 三个重载的目标手牌都是本体用 <c>cards[0].Owner</c> 推出来的，所以规则相同、只是入口形状不同
+/// （单张走 <see cref="HandReturnOwnership.RetargetToActingHand" />，给具体手牌堆那条走
+/// <see cref="HandReturnOwnership.NormalizeIntoHand" />）。这里按参数形状分流；
+/// 只处理 <c>Hand</c> 目标 —— 其余堆在配对里本来就是同一份。
+/// </remarks>
+[HarmonyPatch]
+internal static class HandReturnPatches
 {
-    [HarmonyPrefix]
-    private static void Prefix(CardModel __0, PileType __1)
+    private static IEnumerable<MethodBase> TargetMethods()
     {
-        if (__1 != PileType.Hand)
+        // Add(CardModel, PileType, …) / Add(IEnumerable<CardModel>, PileType, …)
+        foreach (var first in new[] { typeof(CardModel), typeof(IEnumerable<CardModel>) })
         {
-            return;
+            yield return AccessTools.Method(
+                typeof(CardPileCmd),
+                nameof(CardPileCmd.Add),
+                new[] { first, typeof(PileType), typeof(CardPilePosition), typeof(AbstractModel), typeof(bool) });
         }
 
+        // Add(IEnumerable<CardModel>, CardPile, …)
+        yield return AccessTools.Method(
+            typeof(CardPileCmd),
+            nameof(CardPileCmd.Add),
+            new[]
+            {
+                typeof(IEnumerable<CardModel>), typeof(CardPile), typeof(CardPilePosition),
+                typeof(AbstractModel), typeof(bool), typeof(bool),
+            });
+    }
+
+    [HarmonyPrefix]
+    private static void Prefix(MethodBase __originalMethod, object[] __args)
+    {
         try
         {
-            HandReturnOwnership.RetargetToActingHand([__0]);
+            switch (__args)
+            {
+                case [CardModel card, PileType.Hand, ..]:
+                    HandReturnOwnership.RetargetToActingHand([card]);
+                    break;
+
+                case [IEnumerable<CardModel> cards, PileType.Hand, ..]:
+                    HandReturnOwnership.RetargetToActingHand(AsList(cards));
+                    break;
+
+                case [IEnumerable<CardModel> cards, CardPile { Type: PileType.Hand } hand, ..]:
+                    foreach (var card in AsList(cards))
+                    {
+                        HandReturnOwnership.NormalizeIntoHand(card, hand);
+                    }
+
+                    break;
+            }
         }
         catch (Exception ex)
         {
-            Log.Warn($"[together] 回手归属修正失败：{ex.GetType().Name}: {ex.Message}");
+            // 修正失败最多是"这次不修正"，绝不能影响原方法。
+            Log.Warn($"[together] 回手归属修正失败（{__originalMethod.Name}）：{ex.GetType().Name}: {ex.Message}");
         }
     }
-}
 
-/// <summary>批量：<c>Add(cards, PileType.Hand)</c>（捏奥之怒、挖掘、预言终局等）。</summary>
-[HarmonyPatch(
-    typeof(CardPileCmd),
-    nameof(CardPileCmd.Add),
-    new[]
+    private static IReadOnlyList<CardModel> AsList(IEnumerable<CardModel> cards)
     {
-        typeof(IEnumerable<CardModel>), typeof(PileType), typeof(CardPilePosition),
-        typeof(AbstractModel), typeof(bool),
-    })]
-internal static class HandReturnBatchTypePatch
-{
-    [HarmonyPrefix]
-    private static void Prefix(IEnumerable<CardModel> __0, PileType __1)
-    {
-        if (__1 != PileType.Hand)
-        {
-            return;
-        }
-
-        try
-        {
-            HandReturnOwnership.RetargetToActingHand(__0 as IReadOnlyList<CardModel> ?? __0.ToList());
-        }
-        catch (Exception ex)
-        {
-            Log.Warn($"[together] 回手归属修正失败（批量）：{ex.GetType().Name}: {ex.Message}");
-        }
-    }
-}
-
-/// <summary>批量 + 明确给出的手牌堆：把牌归到该手牌的主人（补齐单张路径已有的规则）。</summary>
-[HarmonyPatch(
-    typeof(CardPileCmd),
-    nameof(CardPileCmd.Add),
-    new[]
-    {
-        typeof(IEnumerable<CardModel>), typeof(CardPile), typeof(CardPilePosition),
-        typeof(AbstractModel), typeof(bool), typeof(bool),
-    })]
-internal static class HandReturnBatchPilePatch
-{
-    [HarmonyPrefix]
-    private static void Prefix(IEnumerable<CardModel> __0, CardPile __1)
-    {
-        if (__1.Type != PileType.Hand)
-        {
-            return;
-        }
-
-        foreach (var card in __0 as IReadOnlyList<CardModel> ?? __0.ToList())
-        {
-            try
-            {
-                HandReturnOwnership.NormalizeIntoHand(card, __1);
-            }
-            catch (Exception ex)
-            {
-                Log.Warn($"[together] 手牌归属规整失败：{ex.GetType().Name}: {ex.Message}");
-                return;
-            }
-        }
+        return cards as IReadOnlyList<CardModel> ?? cards.ToList();
     }
 }

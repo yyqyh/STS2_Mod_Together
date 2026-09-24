@@ -8,6 +8,7 @@ using MegaCrit.Sts2.Core.Entities.Creatures;
 using MegaCrit.Sts2.Core.Entities.Players;
 using MegaCrit.Sts2.Core.Entities.Powers;
 using MegaCrit.Sts2.Core.GameActions.Multiplayer;
+using MegaCrit.Sts2.Core.Helpers;
 using MegaCrit.Sts2.Core.Logging;
 using MegaCrit.Sts2.Core.Models.Powers;
 using MegaCrit.Sts2.Core.Models;
@@ -595,11 +596,34 @@ internal static class PowerMirror
             return;
         }
 
+        // "能力自己衍生出来的跨成员施加"不镜像：没有卡/药水来源、又施加在别人身上（拦截的 CoveredPower 在
+        // AfterApplied 里给掩护者挂 InterceptPower 就是这种）。镜像它只会得到"自己掩护自己"这类自相矛盾的关系。
+        if (power.Applier is { } source && !ReferenceEquals(source, owner) && !PowerApplySource.HasActionSource(power))
+        {
+            CappedLog.Info(
+                "power.mirror.skip",
+                $"{power.GetType().Name} 是能力自己衍生的跨成员施加（无卡/药水来源）→ 不镜像，避免复制出矛盾关系");
+            return;
+        }
+
         _mirrorDepth++;
         try
         {
             foreach (var other in owner.OthersOrEmpty())
             {
+                // 非 Instanced 的能力在同一个 creature 上只能有一份（本体在 PowerCmd.Apply 里先做
+                // FindExistingInstanceForStacking，第二份走"改层数"）。我们绕过了那条路，所以这里自己判：
+                // 目标已经有同一份就**不再添加** —— 层数由 OnPowerAmountChanged 的既有收口同步。
+                // 不判的后果是本体直抛 `Trying to add multiple instances of a non-instanced power to a creature.`
+                // （实测：拦截的 InterceptPower 就是这样把整次出牌打断的。）
+                if (power.InstanceType != PowerInstanceType.Instanced && other.GetPower(power.Id) is not null)
+                {
+                    CappedLog.Info(
+                        "power.mirror.skip",
+                        $"{power.GetType().Name} 在 netId{other.Player?.NetId} 上已有一份（非 Instanced）→ 跳过添加，层数由既有收口同步");
+                    continue;
+                }
+
                 // MutableClone 深拷 DynamicVars、重初始化 _internalData 并置空 _owner，可直接挂到另一个 creature。
                 if (power.MutableClone() as PowerModel is not { } clone)
                 {
@@ -614,7 +638,20 @@ internal static class PowerMirror
                     continue;
                 }
 
+                // L1：身份对齐。本体的 `Applier` / `Target` 是在 PowerCmd.Apply 里设的，而我们绕过它直接 ApplyInternal
+                // → 这两个只能自己补（否则副本不知道自己是谁施加的、指向谁，日志/判据都会错）。
+                // L4-ii：**关系型**（"我施加给队友"，Owner != Applier）的副本要从"另一方视角"复述这段关系 ——
+                // Applier 换成原件宿主，于是拦截那类能力在两边各自成立（原件：我掩护你；副本：你掩护我）。
+                var relational = power.Applier is { } applier && !ReferenceEquals(applier, owner);
+                clone.Applier = relational ? owner : power.Applier;
+                clone.Target = ReferenceEquals(power.Target, owner)
+                    ? other
+                    : power.Target;
+
                 clone.ApplyInternal(other, power.Amount, silent: true);
+
+                // 自身字段（派生类那些非基础设施字段）在 ApplyInternal 之后补：Redirect 需要副本的 Owner 已经就位。
+                PowerPayload.SyncFields(power, clone);
 
                 // 打上"我是镜像副本"的标记（见 IsMirrorCopy 的注释）。
                 MirrorCopies.Add(clone, MirrorMarker);
@@ -625,6 +662,14 @@ internal static class PowerMirror
                 // 本体对玩家侧的减益会顺手设 SkipNextDurationTick（"上减益这回合先不掉层"），克隆体造在那行之前，得自己补上。
                 clone.SkipNextDurationTick = power.SkipNextDurationTick
                                              || (other.Side == CombatSide.Player && power.Type == PowerType.Debuff);
+
+                // L3-b：**关系型**副本要补跑一次 AfterApplied —— 因为它的衍生施加（拦截的 CoveredPower→InterceptPower）
+                // 被"无来源的跨成员施加不镜像"那条守卫拦住了，只能由副本自己建。
+                // 非关系型不重放：它们的衍生能力由正常镜像机制送过去，再重放就是一边双份（FlexPotion 那类）。
+                if (relational)
+                {
+                    ScheduleReplay(clone);
+                }
             }
 
             // 记一笔，供"同一个效果打到组里其他人"的判定使用。
@@ -633,6 +678,68 @@ internal static class PowerMirror
         finally
         {
             _mirrorDepth--;
+        }
+    }
+
+    /// <summary>让镜像副本补跑一次"施加流程"（异步，失败只记日志）。</summary>
+    /// <remarks>
+    /// <b>为什么不能直接在钩子里 await</b>：我们挂在 <c>Creature.ApplyPowerInternal</c> 的同步后缀上，拿不到异步上下文；
+    /// 而且本体的副本重放本来就要等原件这一轮施加走完（<c>PowerCmd.Apply</c> 是 async 的）。
+    /// <b>为什么不广播 Hook</b>：广播会让"这份能力被施加了"在战斗里被算两次（怪、遗物、别的 mod 都会多响应一次），
+    /// 而副本需要的只是<b>能力自己</b>的初始化/收尾。
+    /// <b>为什么只重放 <c>AfterApplied</c></b>：<c>BeforeApplied</c> 里做的事大多是"给自己加一份别的能力"
+    /// （临时力量 → 力量），而那份衍生能力本来就会被镜像机制送到两边 —— 再重放一次会变成一边双份（FlexPotion 那类）。
+    /// 需要重放 <c>BeforeApplied</c> 时把下面那行放开，并逐个能力验证。
+    /// </remarks>
+    private static void ScheduleReplay(PowerModel clone)
+    {
+        try
+        {
+            TaskHelper.RunSafely(ReplayAsync(clone));
+        }
+        catch (Exception ex)
+        {
+            CappedLog.Info("power.replay", $"镜像副本重放施加流程失败（忽略）：{ex.GetType().Name}: {ex.Message}");
+        }
+    }
+
+    private static async Task ReplayAsync(PowerModel clone)
+    {
+        try
+        {
+            if (clone.Owner is not { } host)
+            {
+                return;
+            }
+
+            var applier = clone.Applier;
+
+            // 需要时放开这一行（默认关：见上文的"只重放 AfterApplied"）：
+            // await clone.BeforeApplied(host, clone.Amount, applier, null);
+
+            // 重放期间屏蔽镜像：副本在这条异步链上派生出来的施加（例如它自己该建的那份 InterceptPower）
+            // 不再往回镜像 —— 关系是"一边一条"，副本补自己那条就够了。
+            _mirrorDepth++;
+            try
+            {
+                await clone.AfterApplied(applier, null);
+            }
+            finally
+            {
+                _mirrorDepth--;
+            }
+
+            CappedLog.Info(
+                "power.replay",
+                $"镜像副本补跑施加流程：{clone.GetType().Name}"
+                + $"（宿主=netId{host.Player?.NetId} 施加者=netId{applier?.Player?.NetId}；只重放 AfterApplied）");
+        }
+        catch (Exception ex)
+        {
+            // 重放失败只影响这一份副本的"首次初始化"，绝不能往外抛（它在副本自己那条异步链上）。
+            CappedLog.Info(
+                "power.replay",
+                $"镜像副本补跑施加流程失败（忽略）：{clone.GetType().Name}：{ex.GetType().Name}: {ex.Message}");
         }
     }
 
@@ -708,7 +815,7 @@ internal static class PowerMirror
     /// <c>PowerInstanceType.Instanced</c> 的能力可以有多个同类型实例，
     /// 所以按（类型，同类型内第几个）配对，而不是按类型唯一匹配。
     /// </remarks>
-    private static PowerModel? FindCounterpart(Creature from, Creature to, PowerModel power)
+    internal static PowerModel? FindCounterpart(Creature from, Creature to, PowerModel power)
     {
         var index = 0;
         foreach (var candidate in from.Powers)
@@ -744,33 +851,35 @@ internal static class PowerMirror
     }
 }
 
-[HarmonyPatch(typeof(Creature), nameof(Creature.ApplyPowerInternal))]
-internal static class PowerAppliedMirrorPatch
+/// <summary>能力三个入口的收口：施加 / 移除 / 改层数，统统交给 <see cref="PowerMirror" />。</summary>
+[HarmonyPatch]
+internal static class PowerMirrorPatches
 {
-    [HarmonyPostfix]
-    private static void Postfix(Creature __instance, PowerModel __0)
+    private static IEnumerable<MethodBase> TargetMethods()
     {
-        PowerMirror.OnPowerApplied(__instance, __0);
+        yield return AccessTools.Method(typeof(Creature), nameof(Creature.ApplyPowerInternal));
+        yield return AccessTools.Method(typeof(Creature), nameof(Creature.RemovePowerInternal));
+        yield return AccessTools.Method(typeof(Creature), nameof(Creature.InvokePowerModified));
     }
-}
 
-[HarmonyPatch(typeof(Creature), nameof(Creature.RemovePowerInternal))]
-internal static class PowerRemovedMirrorPatch
-{
     [HarmonyPostfix]
-    private static void Postfix(Creature __instance, PowerModel __0)
+    private static void Postfix(Creature __instance, PowerModel __0, MethodBase __originalMethod, object[] __args)
     {
-        PowerMirror.OnPowerRemoved(__instance, __0);
-    }
-}
+        switch (__originalMethod.Name)
+        {
+            case nameof(Creature.ApplyPowerInternal):
+                PowerMirror.OnPowerApplied(__instance, __0);
+                break;
 
-[HarmonyPatch(typeof(Creature), nameof(Creature.InvokePowerModified))]
-internal static class PowerAmountMirrorPatch
-{
-    [HarmonyPostfix]
-    private static void Postfix(Creature __instance, PowerModel __0, bool __2)
-    {
-        PowerMirror.OnPowerAmountChanged(__instance, __0, __2);
+            case nameof(Creature.RemovePowerInternal):
+                PowerMirror.OnPowerRemoved(__instance, __0);
+                break;
+
+            // InvokePowerModified(power, change, silent)
+            default:
+                PowerMirror.OnPowerAmountChanged(__instance, __0, __args.Length > 2 && __args[2] is true);
+                break;
+        }
     }
 }
 

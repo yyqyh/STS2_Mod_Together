@@ -1,4 +1,4 @@
-using System.Runtime.CompilerServices;
+using System.Reflection;
 
 using HarmonyLib;
 using MegaCrit.Sts2.Core.Combat;
@@ -10,28 +10,20 @@ using Together.Core.Utils;
 
 namespace Together.Core.Patches.Combat;
 
-/// <summary>
-/// 钩子监听表去重：共享牌堆 / 共享主卡组里的牌会被当成<b>两个</b>监听者，
-/// 于是"每回合一次"的卡牌/附魔效果触发两遍。
-/// </summary>
+/// <summary>钩子监听表去重：共享牌堆 / 共享主卡组里的牌会被当成<b>两个</b>监听者，于是"每回合一次"的
+/// 卡牌 / 附魔效果触发两遍。</summary>
 /// <remarks>
-/// 两处派发源头都要去重，因为两边都会重复：
-/// <c>CombatState.IterateHookListeners</c> 是按 creature 逐个收集的：先加
-/// <c>creature.Powers</c>，再加那名玩家的遗物/药水/宝珠，最后把
-/// <c>player.PlayerCombatState.AllPiles</c> 里每张牌（连同它的 Affliction / Enchantment）塞进列表。
-/// 共享牌库下回声的 <c>AllPiles</c> 指向的正是锚点那几口堆（见 <see cref="SharedPileImpl" />），
-/// 所以同一张牌会被收集两次、派发两次；
-/// <c>RunState.IterateHookListeners</c> 里是 <c>foreach (player) foreach (card in player.Deck.Cards)</c>，
-/// 而回声的 <c>Deck</c> 重定向到锚点那一份 —— 主卡组的每张牌同样会被收集两次。
-/// 实测症状：<c>Imbued</c>（注能）在回合开始把牌自动打出<b>两次</b>；
-/// 更要命的是第二次派发常常发生在选择界面/动画中间，把战斗循环卡住（表现为黑屏不动）。
-/// 去重必须按<b>引用</b>比对：模型类的 <c>Equals</c> 有可能按 Id 比较，
-/// 按值去重会把"两张同名牌"错当成一张（那会漏派发一张牌的所有钩子）。
-/// 原版对局里各玩家的牌堆互不相交、监听表本来就没有重复项，所以这个补丁在单人/原版联机下是空操作。
-/// <b>注意</b>：这里<b>只</b>去重，不去过滤"镜像副本"。
-/// 曾经试过在回合族钩子里统一丢掉镜像副本，但那会连带把"每回合重置的内部计数"也一起丢掉
-/// （实测杂耍计数整局不重置），所以那种"会改身体数值"的少数能力改成逐类处理
-/// （见 <see cref="MirroredPowerSingleFirePatch" />）。
+/// 两处派发源头都要去重：<c>CombatState.IterateHookListeners</c> 按 creature 逐个收集（powers → 那名玩家的
+/// 遗物/药水/宝珠 → <c>player.PlayerCombatState.AllPiles</c> 里每张牌连同它的 Affliction / Enchantment），
+/// 而共享牌库下回声的 <c>AllPiles</c> 正指向锚点那几口堆（见 <see cref="SharedPileImpl" />）；
+/// <c>RunState.IterateHookListeners</c> 是 <c>foreach (player) foreach (card in player.Deck.Cards)</c>，
+/// 而回声的 <c>Deck</c> 重定向到锚点那一份 —— 两边的牌都被收集两次。
+/// 实测症状：<c>Imbued</c>（注能）在回合开始把牌自动打出<b>两次</b>；更要命的是第二次派发常常发生在选择界面/
+/// 动画中间，把战斗循环卡住（表现为黑屏不动）。
+/// 去重必须按<b>引用</b>比对：模型类的 <c>Equals</c> 有可能按 Id 比较，按值去重会把"两张同名牌"错当成一张。
+/// 原版各玩家的牌堆互不相交、监听表本来就没有重复项，所以这个补丁在单人 / 原版联机下是空操作。
+/// <b>这里只去重，不过滤"镜像副本"</b>：曾试过在回合族钩子里统一丢掉副本，那会连带丢掉"每回合重置的内部计数"
+/// （实测杂耍计数整局不重置），所以那种"会改身体数值"的少数能力改成逐类处理（见 <see cref="MirroredPowerSingleFirePatch" />）。
 /// </remarks>
 internal static class HookListenerDedupe
 {
@@ -45,7 +37,7 @@ internal static class HookListenerDedupe
             _reports++;
 
             var all = listeners as IReadOnlyCollection<AbstractModel> ?? listeners.ToList();
-            var distinct = all.Distinct<AbstractModel>(ReferenceComparer.Instance).ToList();
+            var distinct = all.Distinct<AbstractModel>(ReferenceEqualityComparer.Instance).ToList();
 
             if (distinct.Count != all.Count)
             {
@@ -58,7 +50,7 @@ internal static class HookListenerDedupe
             return distinct.Select(SyncMirrorPayload);
         }
 
-        return listeners.Distinct<AbstractModel>(ReferenceComparer.Instance).Select(SyncMirrorPayload);
+        return listeners.Distinct<AbstractModel>(ReferenceEqualityComparer.Instance).Select(SyncMirrorPayload);
     }
 
     /// <summary>枚举到某个监听者时，如果它是镜像副本，先把原件那边的内部数据同步过来。</summary>
@@ -74,43 +66,18 @@ internal static class HookListenerDedupe
         return model;
     }
 
-    /// <summary>引用相等的比较器（理由见类型注释：按 Id 去重会误伤同名牌）。</summary>
-    internal sealed class ReferenceComparer : IEqualityComparer<AbstractModel>
-    {
-        internal static readonly ReferenceComparer Instance = new();
-
-        public bool Equals(AbstractModel? x, AbstractModel? y)
-        {
-            return ReferenceEquals(x, y);
-        }
-
-        public int GetHashCode(AbstractModel obj)
-        {
-            return RuntimeHelpers.GetHashCode(obj);
-        }
-    }
 }
 
-/// <summary>战斗级监听表去重（共享牌堆里的每张牌）。</summary>
-[HarmonyPatch(typeof(CombatState), nameof(CombatState.IterateHookListeners))]
-internal static class HookListenerDedupePatch
+/// <summary>监听表去重：战斗级（共享牌堆里的牌）+ 跑局级（共享主卡组里的牌）。</summary>
+[HarmonyPatch]
+internal static class HookListenerDedupePatches
 {
-    [HarmonyPostfix]
-    private static void Postfix(ref IEnumerable<AbstractModel> __result)
+    private static IEnumerable<MethodBase> TargetMethods()
     {
-        if (!TogetherPair.IsActive || __result is null)
-        {
-            return;
-        }
-
-        __result = HookListenerDedupe.Apply(__result);
+        yield return AccessTools.Method(typeof(CombatState), nameof(CombatState.IterateHookListeners));
+        yield return AccessTools.Method(typeof(RunState), nameof(RunState.IterateHookListeners));
     }
-}
 
-/// <summary>跑局级监听表去重（共享主卡组里的每张牌）。</summary>
-[HarmonyPatch(typeof(RunState), nameof(RunState.IterateHookListeners))]
-internal static class RunHookListenerDedupePatch
-{
     [HarmonyPostfix]
     private static void Postfix(ref IEnumerable<AbstractModel> __result)
     {

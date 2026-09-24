@@ -10,6 +10,7 @@ using MegaCrit.Sts2.Core.Logging;
 using STS2RitsuLib;
 using STS2RitsuLib.Utils.Persistence;
 using Together;
+using Together.Core.Utils;
 
 namespace Together.Core.Patches.Deck;
 
@@ -428,59 +429,12 @@ internal static class SameOwnerCheckCompat
 
             foreach (var method in methods)
             {
-                if (ContainsFragment(method))
+                if (ModelAccess.ContainsStringConstant(method, Fragment))
                 {
                     yield return method;
                 }
             }
         }
-    }
-
-    /// <summary>粗查：方法的 IL 字节里有没有目标字符串常量。</summary>
-    /// <remarks>
-    /// 不解析成指令序列（几千个方法会明显拖慢启动）：直接扫原始字节里的 <c>ldstr</c>（0x72），
-    /// 用 <c>ResolveString</c> 取它引用的字符串。0x72 也可能只是别的指令的操作数字节，
-    /// 那种情况 <c>ResolveString</c> 会抛，吞掉即可（最坏多解析一次，不影响正确性）。
-    /// </remarks>
-    private static bool ContainsFragment(MethodBase method)
-    {
-        try
-        {
-            var bytes = method.GetMethodBody()?.GetILAsByteArray();
-            if (bytes is null)
-            {
-                return false;
-            }
-
-            for (var i = 0; i + 4 < bytes.Length; i++)
-            {
-                if (bytes[i] != 0x72)
-                {
-                    continue;
-                }
-
-                var token = BitConverter.ToInt32(bytes, i + 1);
-                try
-                {
-                    var text = method.Module.ResolveString(token);
-                    if (!string.IsNullOrEmpty(text)
-                        && text.Contains(Fragment, StringComparison.OrdinalIgnoreCase))
-                    {
-                        return true;
-                    }
-                }
-                catch (Exception)
-                {
-                    // 不是字符串 token，继续扫。
-                }
-            }
-        }
-        catch (Exception)
-        {
-            // 动态方法 / 没有方法体 / 元数据读不出来 —— 都当"没有"。
-        }
-
-        return false;
     }
 
     /// <summary>把目标字符串后面的 <c>newobj + throw</c> 改成 <c>pop + nop</c>。</summary>

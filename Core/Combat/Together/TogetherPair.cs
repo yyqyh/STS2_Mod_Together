@@ -55,8 +55,8 @@ internal static class TogetherPair
     /// 本局是否真的在"共用身体"：配对已武装（锚点 + ≥1 回声）**且这是联机局**。
     /// </summary>
     /// <remarks>
-    /// 全 mod 的总闸门：镜像（血量/格挡/上限/能力/金币）、球位、召唤物、归属归一、事件并发保护、
-    /// 牌堆顺序归一……都只看这一个属性，所以判定写在这里、只写一次。
+    /// 全 mod 的总闸门：镜像（血量/格挡/上限/能力/金币）、球位、召唤物、归属归一、事件并发保护……
+    /// 都只看这一个属性，所以判定写在这里、只写一次。
     /// <b>为什么必须带"联机"这一条</b>：配对按设计"非共生体局不清空"（避免读档/重连时误清），
     /// 于是单人局里可能还留着上一局联机的配对，`IsActive` 为真会让补丁去动单人局的数据 ——
     /// 最典型是"草蜢偷牌把上一局的玩家 creature 塞进 targets → 本体 NRE 崩溃"（实测 2026-09-23 11:28）。
@@ -85,23 +85,20 @@ internal static class TogetherPair
     /// <summary>锚点当前的 <see cref="PlayerCombatState" />；所有回声的四个牌堆都指向它。</summary>
     public static PlayerCombatState? AnchorCombatState => _anchorCombatState;
 
-    /// <summary>
-    /// 在<b>跑局构造完成之后</b>激活共生体。调用点在 <c>RunStartPatches</c> 的两个 Postfix 里。
-    /// </summary>
-/// <remarks>
-/// <b>激活时机是这套设计里最容易踩的坑，必须保持"晚于 RunState 构造"。</b>
-/// <c>RunState.CreateShared</c> 的顺序是"先设 p1 的 RunState，再遍历牌组给每张卡设 owner"：
-/// <code>
-/// foreach (Player player in players) {
-///     player.RunState = runState;                    // p1 先拿到 RunState
-///     foreach (CardModel card in player.Deck.Cards)  // ← 若此时已激活，p2.Deck 就是 p1 的卡组
-///         runState.AddCard(card, player);            // → 同一张牌被设两次 owner → 抛异常
-/// }
-/// </code>
-/// 早期版本在 <c>Refresh(player.RunState)</c> 里懒激活，正好命中这一点，结果
-/// <c>InvalidOperationException: Card ... already has an owner</c> → 开局中断 → 黑屏。
-/// 所以只在跑局工厂返回之后激活：那一刻所有人的 RunState 与卡组 owner 都已落定。
-/// </remarks>
+    /// <summary>在<b>跑局构造完成之后</b>激活共生体。调用点在 <c>RunStateReadyPatch</c>（新局 / 读档两个入口）。</summary>
+    /// <remarks>
+    /// <b>激活时机是这套设计里最容易踩的坑，必须保持"晚于 RunState 构造"。</b>
+    /// <c>RunState.CreateShared</c> 的顺序是"先设 p1 的 RunState，再遍历牌组给每张卡设 owner"：
+    /// <code>
+    /// foreach (Player player in players) {
+    ///     player.RunState = runState;                    // p1 先拿到 RunState
+    ///     foreach (CardModel card in player.Deck.Cards)  // ← 若此时已激活，p2.Deck 就是 p1 的卡组
+    ///         runState.AddCard(card, player);            // → 同一张牌被设两次 owner → 抛异常
+    /// }
+    /// </code>
+    /// 早期版本在 <c>Refresh(player.RunState)</c> 里懒激活，正好命中这一点，结果
+    /// <c>InvalidOperationException: Card ... already has an owner</c> → 开局中断、黑屏。
+    /// </remarks>
     public static void Arm(IRunState? runState, bool isNewRun = false)
     {
         if (runState is null || runState is NullRunState)

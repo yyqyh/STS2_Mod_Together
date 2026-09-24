@@ -319,22 +319,17 @@ internal static class CombatStateCreatedPatch
 
 /// <summary>进阶之灾去重：共享卡组下本体"逐玩家各加一张"的诅咒会变成两张。</summary>
 /// <remarks>
-/// <c>AscensionManager.ApplyEffectsTo(player)</c> 是逐玩家调用的
-/// （<c>RunManager.InitializeNewRun</c> 里 <c>foreach (player) ApplyAscensionEffects(player)</c>），
-/// 里面那句 <c>player.Deck.AddInternal(AscendersBane, -1, silent: true)</c> 自然也就执行了两次。
-/// 共享卡组下两个人的 <c>player.Deck</c> 指向同一份（<see cref="TogetherPair.Arm" /> 已经换掉了
-/// 回声的 <c>Deck</c> 字段，getter 也做了重定向），于是同一张诅咒被加了两遍 ——
-/// 表现就是开局卡组里有两张"进阶之灾"。
-/// <b>为什么用 Postfix 去重，而不是 Prefix 直接跳过回声</b>：这个方法里还有<b>应当逐玩家生效</b>的部分
-/// （<c>SubtractFromMaxPotionCount</c>，药水格是各算各的）。整段跳过会让回声的药水格比锚点多一个。
-/// 所以让原方法照常跑，只把共享卡组里多出来的那张摘掉。
-/// 摘牌要连 <c>RunState</c> 的卡牌登记一起清：只用 <c>RemoveInternal</c> 把牌从卡组里拿掉的话，
-/// 这张牌还留在 <c>RunState</c> 的全卡表里，存档/校验和会看到一张"无主的牌"。
-/// 判卡靠类型 + ID 双保险：类型名对不上（本体改过命名）时退回 ID 匹配，
-/// 两样都对不上就什么都不做——绝不去删不认识的牌。
-/// 除了挂在 <c>ApplyEffectsTo</c> 后面，<see cref="TogetherPair.Arm" /> 激活配对时也会对齐一次：
-/// <b>读档/重连走的是 <c>FromSerializable</c>，那条路根本不会调 <c>ApplyEffectsTo</c></b>，
-/// 只在后置补丁里去重的话，早先存下来的"两张进阶之灾"会被原样带回来。
+/// <c>AscensionManager.ApplyEffectsTo(player)</c> 逐玩家调用（<c>RunManager.InitializeNewRun</c> 里
+/// <c>foreach (player) ApplyAscensionEffects(player)</c>），里面那句
+/// <c>player.Deck.AddInternal(AscendersBane, -1, silent: true)</c> 自然执行两次；而共享卡组下两人的
+/// <c>player.Deck</c> 指向同一份（<see cref="TogetherPair.Arm" /> 已换掉回声的 <c>Deck</c> 字段 + getter 重定向）
+/// → 同一张诅咒被加两遍，开局卡组里就有两张"进阶之灾"。
+/// <b>为什么用 Postfix 去重、而不是 Prefix 跳过回声</b>：这个方法里还有<b>应当逐玩家生效</b>的部分
+/// （<c>SubtractFromMaxPotionCount</c>，药水格各算各的），整段跳过会让回声的药水格比锚点多一个。
+/// 摘牌要连 <c>RunState</c> 的登记一起清（<c>RunState.RemoveCard</c>），否则全卡表里留一张"无主的牌"。
+/// 判卡靠类型 + ID 双保险：两样都对不上就什么都不做 —— 绝不去删不认识的牌。
+/// 另外 <see cref="TogetherPair.Arm" /> 激活配对时也会对齐一次：<b>读档/重连走 <c>FromSerializable</c>，
+/// 那条路根本不会调 <c>ApplyEffectsTo</c></b>，否则早先存下来的"两张进阶之灾"会被原样带回来。
 /// </remarks>
 [HarmonyPatch(typeof(AscensionManager), nameof(AscensionManager.ApplyEffectsTo))]
 internal static class AscensionBaneDedupePatch
@@ -442,60 +437,70 @@ internal static class DeterministicCardComparePatch
     }
 }
 
-/// <summary>初始洗牌（<c>CardPile.RandomizeOrderInternal</c>）前先把牌堆排成两端一致的顺序。</summary>
+/// <summary>初始洗牌（<c>CardPile.RandomizeOrderInternal</c>）：<b>只打顺序指纹，不动牌堆</b>。</summary>
 /// <remarks>
 /// 战斗开始时会把主卡组复制进抽牌堆再 <c>UnstableShuffle</c> 打乱，而 <c>UnstableShuffle</c> 是
 /// Fisher-Yates、<b>结果依赖输入顺序</b>。共生体下两端往主卡组里加牌的先后可能不同
 /// （卡牌奖励是两端各自本地执行再互相同步的），于是洗出的顺序不同，校验和当场对不上。
-/// 这里只挂具体的非泛型方法。**不要**去挂 <c>ListExtensions.UnstableShuffle&lt;T&gt;</c> 这类泛型洗牌方法：
+/// <b>我们不再替它把牌堆排齐</b>（那会覆盖"控制牌堆顺序"的 mod），改成洗完留一条两端可比的指纹：
+/// 真出现"战斗一开始就分叉"，先看这行 —— 指纹不同就是输入顺序先漂了。
+/// 另：这里只挂具体的非泛型方法。**不要**去挂 <c>ListExtensions.UnstableShuffle&lt;T&gt;</c> 这类泛型洗牌方法：
 /// .NET 对"引用类型实参的泛型方法"只生成一份代码，Harmony 打上去之后
 /// <c>UnstableShuffle&lt;RelicModel&gt;</c>（遗物抓包）和 <c>StableShuffle&lt;MapPointType&gt;</c>（地图生成）
 /// 都会跑进我们这份补丁里，实测直接把开局打成 <c>EntryPointNotFoundException</c>。
 /// 战斗中洗牌改从比较器那一侧解决，见 <see cref="DeterministicCardComparePatch" />。
 /// </remarks>
 [HarmonyPatch(typeof(CardPile), nameof(CardPile.RandomizeOrderInternal))]
-internal static class DeterministicInitialShufflePatch
+internal static class InitialShuffleProbePatch
 {
-    /// <summary><c>CardPile.Cards</c> 是只读包装，真正可重排的是这个列表。</summary>
+    /// <summary><c>CardPile.Cards</c> 是只读包装，要读当前的顺序得直接拿这个列表。</summary>
     private static readonly AccessTools.FieldRef<CardPile, List<CardModel>> CardsField =
         AccessTools.FieldRefAccess<CardPile, List<CardModel>>("_cards");
 
-    [HarmonyPrefix]
-    private static void Prefix(CardPile __instance, Player player)
+    [HarmonyPostfix]
+    private static void Postfix(CardPile __instance, Player player)
     {
         if (!TogetherPair.IsActive || !TogetherPair.IsMember(player))
         {
             return;
         }
 
-        DeterministicCardOrder.Sort(CardsField(__instance));
+        List<CardModel>? cards = null;
+        try
+        {
+            cards = CardsField(__instance);
+        }
+        catch (Exception)
+        {
+            // 读不到就算了，探针不该影响本体。
+        }
+
+        CappedLog.Info(
+            "order.probe",
+            $"初始洗牌后 {__instance.Type} 顺序指纹：{DeterministicCardOrder.Fingerprint(cards)}（两端应一致）");
     }
 }
 
-/// <summary>新跑局：等 <c>RunState</c> 完全构造完之后再激活共享配对。</summary>
+/// <summary>跑局就绪（新开一局 / 读档重连）：等 <c>RunState</c> 完全构造完之后再激活共享配对。</summary>
 /// <remarks>
 /// 绝不能提前激活——<c>CreateShared</c> 会在设置 <c>player.RunState</c> 之后
 /// 遍历该玩家的卡组给每张卡设 owner，提前激活会让第二次遍历读到被重定向的卡组，
-/// 从而"同一张牌设两次 owner"抛异常（实测开局黑屏就是这么来的）。见 <see cref="TogetherPair.Arm" />。
+/// 从而"同一张牌设两次 owner"抛异常（实测开局黑屏就是这么来的）。
+/// 两者的差别只在 <c>isNewRun</c>：只有新局才加血量上限 / 合并初始卡组。见 <see cref="TogetherPair.Arm" />。
 /// </remarks>
-[HarmonyPatch(typeof(RunState), nameof(RunState.CreateForNewRun))]
-internal static class RunCreatedPatch
+[HarmonyPatch]
+internal static class RunStateReadyPatch
 {
-    [HarmonyPostfix]
-    private static void Postfix(RunState __result)
+    private static IEnumerable<MethodBase> TargetMethods()
     {
-        TogetherPair.Arm(__result, isNewRun: true);
+        yield return AccessTools.Method(typeof(RunState), nameof(RunState.CreateForNewRun));
+        yield return AccessTools.Method(typeof(RunState), nameof(RunState.FromSerializable));
     }
-}
 
-/// <summary>读档 / 重连：同样在 <c>RunState</c> 构造完之后激活。</summary>
-[HarmonyPatch(typeof(RunState), nameof(RunState.FromSerializable))]
-internal static class RunLoadedPatch
-{
     [HarmonyPostfix]
-    private static void Postfix(RunState __result)
+    private static void Postfix(RunState __result, MethodBase __originalMethod)
     {
-        // 读档 / 重连：不能再加血量上限（存档里已经有了）。
-        TogetherPair.Arm(__result, isNewRun: false);
+        // 只有新开一局才加血量上限 / 合并初始卡组；读档重连加会让存档里的值越滚越大。
+        TogetherPair.Arm(__result, isNewRun: __originalMethod.Name == nameof(RunState.CreateForNewRun));
     }
 }

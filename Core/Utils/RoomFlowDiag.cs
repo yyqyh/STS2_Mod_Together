@@ -2,13 +2,9 @@ using System.Reflection;
 
 using Godot;
 using HarmonyLib;
-using MegaCrit.Sts2.Core.Combat;
-using MegaCrit.Sts2.Core.Entities.Cards;
 using MegaCrit.Sts2.Core.Helpers;
 using MegaCrit.Sts2.Core.Logging;
-using MegaCrit.Sts2.Core.Map;
 using MegaCrit.Sts2.Core.Multiplayer.Game;
-using MegaCrit.Sts2.Core.Nodes.Screens.Capstones;
 using MegaCrit.Sts2.Core.Nodes.Screens;
 using MegaCrit.Sts2.Core.Nodes;
 using MegaCrit.Sts2.Core.Runs;
@@ -18,100 +14,75 @@ namespace Together.Core.Utils;
 /// <summary>房间流程的"里程碑"日志（默认开着，每个点最多 30 条）。</summary>
 /// <remarks>
 /// 黑屏这种"没有异常、只是卡住"的问题，log 里什么都没有的话没法定位。
-/// 这里把几个关键节点打出来，卡住时就能看出**最后一个成功打印的里程碑**：<c>RunManager.EnterMapCoord</c>
-/// （点了地图节点）、<c>RunManager.EnterMapPointInternal</c>（开始进房间）、<c>NTransition.RoomFadeOut</c> /
-/// <c>RoomFadeIn</c>（转场淡出/淡入，<b>只有 FadeOut 没有 FadeIn = 卡在转场里、画面就是黑的</b>）、
-/// <c>NRewardsScreen.RewardCollectedFrom</c>（取走奖励）、<c>RunManager.ExitCurrentRoom</c>（退出房间）。
-/// 这些钩子都是<b>只看不改</b>的 Postfix/Prefix，不参与任何游戏逻辑；排查完可整体删掉，
-/// 或把 <see cref="CappedLog" /> 的 Limit 调小。
+/// 关键节点打出来，卡住时就能看出**最后一个成功打印的里程碑**：<c>RunManager.EnterMapCoord</c>（点了地图节点）、
+/// <c>EnterMapPointInternal</c>（开始进房间）、<c>NTransition.RoomFadeOut</c> / <c>RoomFadeIn</c>（转场淡出/淡入，
+/// <b>只有 FadeOut 没有 FadeIn = 卡在转场里、画面就是黑的</b>）、<c>NRewardsScreen.RewardCollectedFrom</c>
+/// （取走奖励）、<c>RunManager.ExitCurrentRoom</c>（退出房间）、<c>RewardsSetSynchronizer.CompleteRewardsSet</c>
+/// （后端标记奖励集完成 —— 按钮都点完了但后端**没标记完成**时屏幕会一直等一个永远不来的信号，本体只打一句
+/// <c>All rewards have been taken, but the rewards set is not complete on the backend!</c>）。
+/// 都是<b>只看不改</b>的钩子；排查完可整体删掉，或把 <see cref="CappedLog" /> 的 Limit 调小。
 /// </remarks>
-[HarmonyPatch(typeof(NTransition), nameof(NTransition.RoomFadeOut))]
-internal static class RoomFadeOutDiagPatch
+[HarmonyPatch]
+internal static class RoomFlowDiagPatches
 {
-    [HarmonyPrefix]
-    private static void Prefix()
+    private static IEnumerable<MethodBase> TargetMethods()
     {
-        CappedLog.Info("flow.fade_out", "转场：房间淡出开始（画面开始变黑）");
+        yield return AccessTools.Method(typeof(NTransition), nameof(NTransition.RoomFadeOut));
+        yield return AccessTools.Method(typeof(NTransition), nameof(NTransition.RoomFadeIn));
+        yield return AccessTools.Method(typeof(RunManager), nameof(RunManager.EnterMapCoord));
+        yield return AccessTools.Method(typeof(RunManager), nameof(RunManager.EnterMapPointInternal));
+        yield return AccessTools.Method(typeof(RunManager), nameof(RunManager.Launch));
+        yield return AccessTools.Method(typeof(RunManager), "ExitCurrentRoom");
+        yield return AccessTools.Method(typeof(NRewardsScreen), nameof(NRewardsScreen.RewardCollectedFrom));
+        yield return AccessTools.Method(typeof(RewardsSetSynchronizer), "CompleteRewardsSet");
     }
-}
 
-[HarmonyPatch(typeof(NTransition), nameof(NTransition.RoomFadeIn))]
-internal static class RoomFadeInDiagPatch
-{
     [HarmonyPrefix]
-    private static void Prefix(bool __0)
+    private static void Prefix(MethodBase __originalMethod, object[] __args)
     {
-        CappedLog.Info("flow.fade_in", $"转场：房间淡入开始（showTransition={__0}）—— 看到这行说明黑屏已经结束");
-    }
-}
+        switch (__originalMethod.Name)
+        {
+            case nameof(NTransition.RoomFadeOut):
+                CappedLog.Info("flow.fade_out", "转场：房间淡出开始（画面开始变黑）");
+                break;
 
-[HarmonyPatch(typeof(RunManager), nameof(RunManager.EnterMapCoord))]
-internal static class EnterMapCoordDiagPatch
-{
-    [HarmonyPrefix]
-    private static void Prefix(MapCoord __0)
-    {
-        CappedLog.Info("flow.enter_coord", $"地图：点击节点 {__0}");
-    }
-}
+            case nameof(NTransition.RoomFadeIn):
+                CappedLog.Info("flow.fade_in", $"转场：房间淡入开始（showTransition={__args[0]}）—— 看到这行说明黑屏已经结束");
+                break;
 
-[HarmonyPatch(typeof(RunManager), nameof(RunManager.EnterMapPointInternal))]
-internal static class EnterMapPointDiagPatch
-{
-    [HarmonyPrefix]
-    private static void Prefix(int __0, MapPointType __1)
-    {
-        CappedLog.Info("flow.enter_point", $"房间：开始建造 actFloor={__0} pointType={__1}");
-        HangWatchdog.EnsureRunning();
-    }
-}
+            case nameof(RunManager.EnterMapCoord):
+                CappedLog.Info("flow.enter_coord", $"地图：点击节点 {__args[0]}");
+                break;
 
-/// <summary>读档 / 重连 / ESC 重启房间都会走 <c>RunManager.Launch</c>，而这条路径<b>不经过地图节点</b>，
-/// 所以这里再补一次看门狗——黑屏恰恰多数发生在这条路径上。</summary>
-[HarmonyPatch(typeof(RunManager), nameof(RunManager.Launch))]
-internal static class RunLaunchWatchdogPatch
-{
+            case nameof(RunManager.EnterMapPointInternal):
+                CappedLog.Info("flow.enter_point", $"房间：开始建造 actFloor={__args[0]} pointType={__args[1]}");
+                HangWatchdog.EnsureRunning();
+                break;
+
+            case "ExitCurrentRoom":
+                CappedLog.Info("flow.exit_room", "房间：开始退出当前房间");
+                break;
+
+            case "CompleteRewardsSet":
+                CappedLog.Info("flow.rewardset_done", $"后端：奖励集完成 set={__args[0]} state={__args[1]}");
+                break;
+        }
+    }
+
     [HarmonyPostfix]
-    private static void Postfix()
+    private static void Postfix(MethodBase __originalMethod)
     {
-        HangWatchdog.EnsureRunning();
-    }
-}
+        switch (__originalMethod.Name)
+        {
+            // 读档 / 重连 / ESC 重启房间都走这条路径，而它**不经过地图节点** —— 黑屏恰恰多数发生在这里。
+            case nameof(RunManager.Launch):
+                HangWatchdog.EnsureRunning();
+                break;
 
-[HarmonyPatch(typeof(RunManager), "ExitCurrentRoom")]
-internal static class ExitRoomDiagPatch
-{
-    [HarmonyPrefix]
-    private static void Prefix()
-    {
-        CappedLog.Info("flow.exit_room", "房间：开始退出当前房间");
-    }
-}
-
-[HarmonyPatch(typeof(NRewardsScreen), nameof(NRewardsScreen.RewardCollectedFrom))]
-internal static class RewardCollectedDiagPatch
-{
-    [HarmonyPostfix]
-    private static void Postfix()
-    {
-        CappedLog.Info("flow.reward_taken", "奖励屏：取走了一项奖励");
-    }
-}
-
-/// <summary>后端（<c>RewardsSetSynchronizer</c>）把某个奖励集标记成"完成/跳过"。</summary>
-/// <remarks>
-/// 这条是排查"黑屏"的关键：奖励屏上的按钮都点完了、但后端那套奖励集**没有被标记完成**时，
-/// 屏幕会一直等一个永远不来的完成信号（表现就是卡住/黑屏），本体只会打一句
-/// <c>All rewards have been taken, but the rewards set is not complete on the backend!</c>。
-/// 有了这条日志就能看出后端到底有没有收到完成，以及完成的是哪个集合。
-/// </remarks>
-[HarmonyPatch(typeof(RewardsSetSynchronizer), "CompleteRewardsSet")]
-internal static class CompleteRewardsSetDiagPatch
-{
-    [HarmonyPrefix]
-    private static void Prefix(object __0, object __1)
-    {
-        CappedLog.Info("flow.rewardset_done", $"后端：奖励集完成 set={__0} state={__1}");
+            case nameof(NRewardsScreen.RewardCollectedFrom):
+                CappedLog.Info("flow.reward_taken", "奖励屏：取走了一项奖励");
+                break;
+        }
     }
 }
 
@@ -146,8 +117,6 @@ internal static class HangWatchdog
 
     /// <summary><c>NTransition</c> 里那两层黑幕的私有字段名。</summary>
     private static readonly string[] MaskFields = ["_simpleTransition", "_gradientTransition"];
-
-    private static readonly Dictionary<string, FieldInfo?> MaskFieldCache = [];
 
     private static Godot.Timer? _timer;
 
@@ -317,13 +286,7 @@ internal static class HangWatchdog
 
     private static Control? ReadMaskControl(NTransition transition, string fieldName)
     {
-        if (!MaskFieldCache.TryGetValue(fieldName, out var field))
-        {
-            field = AccessTools.Field(typeof(NTransition), fieldName);
-            MaskFieldCache[fieldName] = field;
-        }
-
-        return field?.GetValue(transition) as Control;
+        return ModelAccess.FieldOf(typeof(NTransition), fieldName)?.GetValue(transition) as Control;
     }
 
     /// <summary>最后的兜底：不管本体的淡入链路为什么失败，直接把遮罩透明度按回 0、解除鼠标拦截。</summary>
