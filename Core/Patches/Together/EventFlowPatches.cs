@@ -33,20 +33,16 @@ using Together.Core.Utils;
 
 namespace Together.Core.Patches;
 
-/// <summary>
-/// 原版事件在共生体下的"两个人同时动同一张牌"问题。
-/// </summary>
+/// <summary>原版事件在共生体下的"两个人同时动同一张牌"问题。</summary>
 /// <remarks>
 /// 联机时每个玩家各有一份事件实例（<c>EventModel.IsShared=false</c>），而共生体<b>共用一副卡组</b>：
 /// P1 还停在"选一张牌附魔"时，P2 可能已经把同一张牌附魔 / 移除了 —— P1 再选它就会撞上
 /// <c>Cannot enchant …</c>（附魔不可叠加）或 <c>You cannot remove a card that is not in the deck.</c>，
 /// 异常抛在 <c>SetEventFinished</c> 之前 → <b>事件不结束、房间出不去</b>。
-/// <para>
 /// 对策（默认开启，不改变事件形态）：① 共享卡组一变就按最新状态重建本机选牌界面的候选；
 /// ② 在附魔 / 移除 / 变牌入口把已失效的选择跳过而不是抛异常；
 /// ③ 选牌界面"建到玩家眼前才算数"（见 <see cref="EventEnchantSelection" />）。
 /// 事件本身一律照原版"每人一份、各自选"（<c>IsDeterministic =&gt; !IsShared</c>，翻成共享会少一次校验和）。
-/// </para>
 /// </remarks>
 internal static class EventFlow
 {
@@ -102,12 +98,10 @@ internal static class EventFlow
     }
 }
 
-/// <summary>
-/// "只给候选列表"的附魔选牌调用点（蓝宝石种子「播种」+ 皇家印章）：登记"这次是谁在选"。
-/// </summary>
+/// <summary>"只给候选列表"的附魔选牌调用点（蓝宝石种子「播种」+ 皇家印章）：登记"这次是谁在选"。</summary>
 /// <remarks>
-/// 那条重载没有玩家参数，本体只能从 <c>cards[0].Owner</c> 反推选择者，而共享卡组里牌的 owner 两端不一致 → 双向死锁。
-/// 这两个调用点手里就有 owner，所以在这里登记，选牌时取用并清空。
+/// 那条重载没有玩家参数，本体只能从 <c>cards[0].Owner</c> 反推选择者，而共享卡组里牌的 owner 两端不一致
+/// → 双向死锁。这两个调用点手里就有 owner，所以在这里登记，选牌时取用并清空。
 /// 以后再遇到同类调用点，往 <see cref="TargetMethods" /> 加一行即可。
 /// </remarks>
 [HarmonyPatch]
@@ -249,13 +243,10 @@ internal static class DeckSelectionWatch
         return true;
     }
 
-    /// <summary>
-    /// 开屏那一刻判断：候选是不是都在主卡组里。
-    /// </summary>
+    /// <summary>开屏那一刻判断：候选是不是都在主卡组里。</summary>
     /// <remarks>
-    /// 只有"从主卡组选牌"的界面（事件附魔 / 商店删牌 / 升级）才该被刷新；
-    /// 战斗中"从抽牌堆 / 弃牌堆选牌"的界面候选不在卡组里，一旦被我们按"不在卡组就删"过滤就会整屏空掉。
-    /// 开屏时所有候选都是合法的，所以这里判断最准；之后再遇到"牌被移出卡组"也不会误判成非卡组界面。
+    /// 只有"从主卡组选牌"的界面（事件附魔 / 商店删牌 / 升级）才该被刷新；战斗中"从抽牌堆 / 弃牌堆选牌"
+    /// 的界面候选不在卡组里，被按"不在卡组就删"过滤会整屏空掉。开屏时所有候选都合法，所以这里判断最准。
     /// </remarks>
     private static bool IsDeckScreen(NCardGridSelectionScreen screen)
     {
@@ -377,16 +368,13 @@ internal static class EnchantApplyGuardPatch
     }
 }
 
-/// <summary>
-/// 「卡组选牌界面到底建出来没有、为什么玩家看不到」的现场取证。
-/// </summary>
+/// <summary>「卡组选牌界面到底建出来没有、为什么玩家看不到」的现场取证（只写日志、不改游戏状态）。</summary>
 /// <remarks>
 /// 症状：<c>本机打开了「卡组选牌」界面</c> 打了，玩家屏幕上却什么都没有，过一会儿才突然冒出来。
 /// 原因在 <c>NOverlayStack</c> 的可见性：<c>Push()</c> 遇到"栈被盖住"（地图开着 / capstone 在用）会立刻对
-/// 新界面调 <c>AfterOverlayHidden()</c> → 节点在树里但 <c>Visible=false</c>，之后被别的 overlay 压上来时同样会隐藏。
-/// 另一个和 overlay 无关的坑：窗口没在前台（本地双开时 <c>LocalCoopClone</c> 会把当前不用操作的窗口最小化），
-/// 界面正常显示玩家也看不见 —— 所以窗口状态也一起打。
-/// 取证点：① 建好那一刻；② 同一帧末；③ 之后每次 overlay 栈变化。只写日志、不改游戏状态，排查完可整块删掉。
+/// 新界面调 <c>AfterOverlayHidden()</c> → 节点在树里但 <c>Visible=false</c>。另一个与 overlay 无关的坑：
+/// 窗口没在前台（本地双开时 <c>LocalCoopClone</c> 会把当前不操作的窗口最小化），界面正常显示玩家也看不见。
+/// 取证点：① 建好那一刻；② 同一帧末；③ 之后每次 overlay 栈变化。
 /// </remarks>
 internal static class SelectionScreenProbe
 {
@@ -493,9 +481,7 @@ internal static class SelectionScreenProbe
     }
 }
 
-/// <summary>
-/// 附魔选牌的界面流程（选择者由 <see cref="EnchantSelectionPatches" /> 定）。
-/// </summary>
+/// <summary>附魔选牌的界面流程（选择者由 <see cref="EnchantSelectionPatches" /> 定）。</summary>
 /// <remarks>
 /// 本机负责这次选择时走 <see cref="ShowLocalSelectionAsync" />；否则 <c>WaitForRemoteChoice</c> 等对面，
 /// 由对面的 <c>SyncLocalChoice</c> 把结果送回（选择者按 netId 认，两端必然一致）。
@@ -567,21 +553,17 @@ internal static class EventEnchantSelection
         return (await RunManager.Instance.PlayerChoiceSynchronizer.WaitForRemoteChoice(selector, choiceId)).AsDeckCards();
     }
 
-    /// <summary>
-    /// 「先建再等」：界面建到玩家眼前才算数 —— 被盖住就等、被销毁就重弹。
-    /// </summary>
+    /// <summary>「先建再等」：界面建到玩家眼前才算数 —— 被盖住就等、被销毁就重弹。</summary>
     /// <remarks>
     /// 本体 <c>NOverlayStack.Push</c> 有一条"栈被盖住就把新界面藏起来"的分支：只要此刻地图开着
     /// （事件结束后 <c>NEventRoom.Proceed()</c> 会打开地图让玩家点下一个节点）或 capstone 在用，
-    /// 刚 Push 的界面会被立刻 <c>AfterOverlayHidden()</c> —— 节点在树里但 <c>Visible=false</c>，不会自己恢复；
-    /// 而 <c>run.tscn</c> 里地图画在 overlay 之上，硬显示也没用。更糟的是那张"隐形界面"还压在栈里，
-    /// 玩家点地图换房间把栈清掉时它会被销毁 → 我们收到 TaskCanceled → 这次附魔直接落空
+    /// 刚 Push 的界面会被立刻 <c>AfterOverlayHidden()</c> —— 节点在树里但 <c>Visible=false</c>，不会自己恢复
+    /// （<c>run.tscn</c> 里地图画在 overlay 之上，硬显示也没用）。更糟的是那张"隐形界面"还压在栈里，玩家点地图
+    /// 换房间把栈清掉时它会被销毁 → 收到 TaskCanceled → 这次附魔直接落空
     /// （实测 14:49 log：<c>Visible=False … 地图开着=True</c> → 4.2 秒后 TaskCanceled → 选了 0 张）。
-    /// <para>
     /// 所以：① 被盖住就不弹（每 <see cref="RetryDelaySeconds" /> 秒试一次）；② 弹完复核 <c>Visible</c>，
-    /// 仍是 false 就立刻从栈里撤掉（不留隐形界面）；③ 被销毁就用当前共享卡组重算候选重弹。
+    /// 仍是 false 就立刻从栈里撤掉；③ 被销毁就用当前共享卡组重算候选重弹。
     /// 兜底：超过 <see cref="LocalSelectionBudgetMs" /> 才放弃（记日志 + 按空选择收场）；重试期间不阻塞游戏。
-    /// </para>
     /// </remarks>
     private static async Task<List<CardModel>> ShowLocalSelectionAsync(
         Player selector,
@@ -758,12 +740,8 @@ internal static class RemoveFromDeckGuardPatch
 // 3) 选择同步的两端埋点：只给一份 log 也能看出"谁在等谁"
 // ======================================================================================
 
-/// <summary>
-/// 选择同步两端各打一条：<c>event.wait</c>（本机开始等远端）与 <c>event.submit</c>（本机把结果发出去）。
-/// </summary>
-/// <remarks>
-/// 只看到 wait、两边都没有"界面已建"，就是"选择者算不一致"的死锁（修法见 <see cref="EnchantSelectionPatches" />）。
-/// </remarks>
+/// <summary>选择同步两端各打一条：<c>event.wait</c>（本机开始等远端）与 <c>event.submit</c>（本机把结果发出去）。</summary>
+/// <remarks>只看到 wait、两边都没有"界面已建"，就是"选择者算不一致"的死锁（修法见 <see cref="EnchantSelectionPatches" />）。</remarks>
 [HarmonyPatch]
 internal static class ChoiceSyncDiagPatch
 {
@@ -793,15 +771,12 @@ internal static class ChoiceSyncDiagPatch
 // 5) 附魔选牌入口（三个重载）
 // ======================================================================================
 
-/// <summary>
-/// 附魔选牌的三个重载统统由我们接管：<b>选择者由调用方指定的玩家决定</b>（本体是拿 <c>cards[0].Owner</c> 猜的）。
-/// </summary>
+/// <summary>附魔选牌的三个重载统统由我们接管：<b>选择者由调用方指定的玩家决定</b>（本体是拿 <c>cards[0].Owner</c> 猜的）。</summary>
 /// <remarks>
 /// 本体那条重载里是 <c>Player player = cards[0].Owner;</c>，再由 <c>ShouldSelectLocalCard(player)</c> 决定谁弹界面。
 /// 共享卡组里混着两个人的牌，而牌的 <c>Owner</c> 引用两端并不一致（归属归一补丁会在动画时机改它），
-/// 于是两台机器各自等对方 → 双向死锁、事件卡住。
-/// 修法：带玩家参数的两条用调用方传进来的玩家（两端必然一致）；只给候选列表的那条
-/// （<c>SapphireSeed</c>「播种」/ <c>RoyalStamp</c>）用调用点登记的玩家，没登记就退回锚点。
+/// 于是两台机器各自等对方 → 双向死锁、事件卡住。修法：带玩家参数的两条用调用方传进来的玩家（两端必然一致）；
+/// 只给候选列表的那条（<c>SapphireSeed</c>「播种」/ <c>RoyalStamp</c>）用调用点登记的玩家，没登记就退回锚点。
 /// </remarks>
 [HarmonyPatch]
 internal static class EnchantSelectionPatches
@@ -887,9 +862,7 @@ internal static class EnchantSelectionPatches
 // 6) 变牌兜底：另一份事件实例先动过的牌，别再硬变（本体在这两处是直接抛异常的）
 // ======================================================================================
 
-/// <summary>
-/// 变牌前把"已经不能再变"的牌剔掉（本体对每张牌都是<b>直接抛异常</b>的，两份事件实例各动一次手很容易撞上）。
-/// </summary>
+/// <summary>变牌前把"已经不能再变"的牌剔掉（本体对每张牌都是<b>直接抛异常</b>的，两份事件实例各动一次手很容易撞上）。</summary>
 /// <remarks>
 /// 本体 <c>CardCmd.Transform</c>：<c>!IsTransformable</c> → "… is un-transformable."、<c>Pile == null</c> → "… has no pile."，
 /// 抛出去事件就中断。这里先过滤；全被过滤就整批跳过，事件照常往下走。

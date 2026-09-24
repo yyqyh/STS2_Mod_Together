@@ -13,34 +13,15 @@ using Together;
 
 namespace Together.Core.Patches.Deck;
 
-/// <summary>
-/// 通用兼容层：放行<b>任何自己重写了"同批 owner 必须一致"这条校验的 mod</b>。
-/// </summary>
+/// <summary>通用兼容层：放行<b>任何自己重写了"同批 owner 必须一致"这条校验的 mod</b>。</summary>
 /// <remarks>
-/// <para>
-/// 背景：本体的批量 <c>CardPileCmd.Add</c> 有一条硬校验"同一次调用里所有牌 owner 必须一致"，
-/// 它的前提是"每个玩家的牌堆各自独立"。共享牌库下这个前提不成立——共享的弃牌堆／抽牌堆本来
-/// 就该同时装着两个人的牌，而<b>洗牌</b>正好是"把弃牌堆混进抽牌堆"的批量 Add。
-/// 本体那一处已经由 <see cref="DifferentOwnersCheckPatch" /> 用转译器打掉；
-/// 但<b>别的 mod 可能自己复制了同一份校验</b>（实测：RandomForeseer 的洗牌预测模拟
-/// <c>CombatPredictionSimulator.AddToPile</c>），它们会在共生体局里抛异常。
-/// </para>
-/// <para>
-/// 判据刻意<b>不写任何 mod 名字</b>：只要某个方法的 IL 里出现字符串常量
-/// <c>different owners</c>，就说明它重写了这条校验 —— 而这条校验在共享牌库下永远是错的结论，
-/// 所以按同一条规则放行即可。判据来自<b>代码内容</b>，不来自"是谁"。
-/// </para>
-/// <para>
-/// 具体动作：把 <c>ldstr "…different owners…"</c> 后面的
-/// <c>newobj InvalidOperationException</c> 换成 <c>pop</c>（吃掉已压栈的字符串、保持栈平衡），
-/// 再把随后的 <c>throw</c> 换成 <c>nop</c>（让执行流继续往下走）。
-/// 与本体那条补丁的改写方式完全一致，只是目标是扫描出来的。
-/// </para>
-/// <para>
-/// 可审计：每放行一个方法都会在启动日志里打一行"兼容放行：程序集 / 类型 / 方法"。
-/// 只扫非系统程序集（本体 <c>sts2</c> 已被上面那条补丁覆盖，不重复扫），
-/// 且已扫过的程序集会被记住，重复调用只补扫新加载的。
-/// </para>
+/// 本体那条"同一次调用里所有牌 owner 必须一致"的校验，前提是"每个玩家的牌堆各自独立"——
+/// 共享牌库下不成立（洗牌就是"弃牌堆 + 抽牌堆"一次批量 Add）。本体那一处已由
+/// <see cref="DifferentOwnersCheckPatch" /> 打掉，但<b>别的 mod 会自己复制同一份校验</b>
+/// （实测：RandomForeseer 的洗牌预测）。
+/// 判据<b>不写 mod 名字</b>：方法 IL 里出现字符串常量 <c>different owners</c> 就算重写了这条校验，
+/// 而它在共享牌库下永远是错的结论 → 按同一规则放行（把 <c>newobj</c> 换成 <c>pop</c>、<c>throw</c> 换成 <c>nop</c>）。
+/// 每放行一个方法都会在启动日志里打一行，可审计；本体 <c>sts2</c> 不重复扫。
 /// </remarks>
 internal static class SameOwnerCheckCompat
 {
@@ -77,9 +58,7 @@ internal static class SameOwnerCheckCompat
         "xunit",
     ];
 
-    /// <summary>
-    /// 判定规则版本。<b>以后新增判定片段时必须 +1</b>，好让旧缓存整份作废重扫。
-    /// </summary>
+    /// <summary>判定规则版本。<b>以后新增判定片段时必须 +1</b>，好让旧缓存整份作废重扫。</summary>
     private const int RulesVersion = 1;
 
     private const string CacheKey = "hook_compat_cache";
@@ -93,23 +72,12 @@ internal static class SameOwnerCheckCompat
     private static HookCompatCacheData? _cache;
     private static bool _cacheLoaded;
 
-    /// <summary>
-    /// 跨启动缓存：记住"哪些程序集已经验证过、结论是什么"。
-    /// </summary>
+    /// <summary>跨启动缓存：记住"哪些程序集已经验证过、结论是什么"。</summary>
     /// <remarks>
-    /// <para>
-    /// <b>键是程序集的 MVID</b>（模块版本 id）—— 同一个二进制永远是同一个 MVID，
-    /// 而 mod 只要重新编译过 MVID 就会变。所以：
-    /// </para>
-    /// <list type="bullet">
-    /// <item><description>下次启动遇到同样的二进制 → 直接跳过扫描（<c>Tokens</c> 为空时连放行动作都不用做）。</description></item>
-    /// <item><description>mod 更新过 → MVID 变了 → 缓存自动失效、重新扫描。<b>因此不需要"重新验证"按钮。</b></description></item>
-    /// <item><description>想手动强制重扫：删掉 <c>together_hook_compat.json</c>（在 mod 数据目录里）即可。</description></item>
-    /// </list>
-    /// <para>
-    /// 需要放行的程序集也不吃亏：记下的是<b>元数据 token</b>，下次直接 <c>ResolveMethod</c> 拿回方法去装补丁，
-    /// 同样不用扫 IL。
-    /// </para>
+    /// <b>键是程序集的 MVID</b>（模块版本 id）—— 同一个二进制永远是同一个 MVID，mod 重新编译过就会变。所以：
+    /// 同样的二进制 → 跳过扫描（<c>Tokens</c> 为空时连放行动作都不用做）；mod 更新过 → MVID 变了 → 缓存自动失效重扫
+    /// （<b>因此不需要"重新验证"按钮</b>）；要手动强制重扫就删掉 <c>together_hook_compat.json</c>。
+    /// 需要放行的程序集记的是<b>元数据 token</b>，下次直接 <c>ResolveMethod</c> 装补丁，同样不扫 IL。
     /// </remarks>
     internal sealed class HookCompatCacheData
     {
@@ -250,10 +218,7 @@ internal static class SameOwnerCheckCompat
         }
     }
 
-    /// <summary>
-    /// 按缓存里记下的元数据 token 直接放行（不扫 IL）。
-    /// </summary>
-    /// <returns>缓存是否可用；false 表示这个程序集要重扫。</returns>
+    /// <summary>按缓存里的元数据 token 直接放行（不扫 IL）；返回 false 表示要重扫这个程序集。</summary>
     private static bool TryReplay(
         HarmonyLib.Harmony harmony,
         Assembly assembly,
@@ -471,14 +436,11 @@ internal static class SameOwnerCheckCompat
         }
     }
 
-    /// <summary>
-    /// 粗查：方法的 IL 里有没有目标字符串常量。
-    /// </summary>
+    /// <summary>粗查：方法的 IL 字节里有没有目标字符串常量。</summary>
     /// <remarks>
-    /// 刻意不解析成指令序列（那样要给每个方法建列表，几千个方法会明显拖慢启动）：
-    /// 直接扫原始 IL 字节里的 <c>ldstr</c>（0x72）操作码，用 <c>ResolveString</c> 取出它引用的字符串。
-    /// 0x72 也可能只是别的指令的操作数字节，那种情况 <c>ResolveString</c> 会抛，吞掉即可
-    /// （最坏是多解析一次指令序列，不影响正确性）。
+    /// 不解析成指令序列（几千个方法会明显拖慢启动）：直接扫原始字节里的 <c>ldstr</c>（0x72），
+    /// 用 <c>ResolveString</c> 取它引用的字符串。0x72 也可能只是别的指令的操作数字节，
+    /// 那种情况 <c>ResolveString</c> 会抛，吞掉即可（最坏多解析一次，不影响正确性）。
     /// </remarks>
     private static bool ContainsFragment(MethodBase method)
     {
@@ -522,10 +484,7 @@ internal static class SameOwnerCheckCompat
     }
 
     /// <summary>把目标字符串后面的 <c>newobj + throw</c> 改成 <c>pop + nop</c>。</summary>
-    /// <remarks>
-    /// 与本体那条补丁的区别：这里是"扫描出来的方法"，形状可能不完全是预期的那种，
-    /// 所以<b>找不到就原样返回并打一行警告</b>，绝不抛异常打断其它 mod 的补丁安装。
-    /// </remarks>
+    /// <remarks>目标是"扫出来的第三方方法"，形状可能不同 → <b>找不到就原样返回 + 警告</b>，绝不抛异常。</remarks>
     private static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
     {
         var list = instructions.ToList();

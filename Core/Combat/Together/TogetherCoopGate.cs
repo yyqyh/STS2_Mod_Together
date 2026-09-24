@@ -9,17 +9,13 @@ namespace Together.Core.Combat;
 /// 选人阶段关于共享卡组的两条规则：谁还能"确定"，以及能不能起程。
 /// </summary>
 /// <remarks>
-/// <para>
 /// 判定数据来自两处：大厅（谁是这局的玩家，本体全网同步）+ 共生体成员集合
 /// （<see cref="SymbiosisMembers" />，主机权威、sidecar 同步）。
 /// 这两样都是两端一致的，所以"第三个人按不动"在两边看到的结果相同。
-/// </para>
-/// <para>
 /// 规则：名额 = 设置里的"人数上限"（默认 2）；已经确定过的人可以再按一次取消；名额满了别人按不动。
 /// <b>起程门控</b>：0 人确定 = 普通联机局；<b>达到最小人数（2 人）就放行</b>——这些人共享卡组
 /// （真正配对见 <c>TogetherPair.Arm</c>，它按"确定过的人 + 至少 MinMembers"成组，不要求凑满名额）。
 /// 只有"确定了 1 个人"时拦住：否则会开出一局"一个人的普通游戏"，和按按钮时的预期不符。
-/// </para>
 /// </remarks>
 internal static class TogetherCoopGate
 {
@@ -77,10 +73,7 @@ internal static class TogetherCoopGate
         return false;
     }
 
-    /// <summary>
-    /// 这位玩家还能不能确定。
-    /// </summary>
-    /// <remarks>已经确定的人返回 true —— 那是"可以按"（按下去是取消）。</remarks>
+    /// <summary>这位玩家还能不能确定（已经确定的人返回 true —— 那是"可以按"，按下去是取消）。</summary>
     public static bool CanConfirm(StartRunLobby? lobby, ulong playerId)
     {
         if (!IsMultiplayerLobby(lobby))
@@ -91,10 +84,8 @@ internal static class TogetherCoopGate
         return IsConfirmed(lobby, playerId) || CountConfirmed(lobby) < SymbiosisMembers.Capacity;
     }
 
-    /// <summary>
-    /// 能不能起程。
-    /// </summary>
-    /// <remarks>0 人（普通联机）或达到最小人数（2 人 → 共享卡组）都可以；只有"确定了 1 个人"时拦住。</remarks>
+    /// <summary>能不能起程：0 人（普通联机）或达到最小人数（2 人 → 共享卡组）都可以；
+    /// 只有"确定了 1 个人"时拦住。</summary>
     public static bool CanEmbark(StartRunLobby? lobby)
     {
         if (!Applies(lobby))

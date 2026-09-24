@@ -21,20 +21,12 @@ namespace Together.Core.Combat;
 /// 共享身体（生命 / 最大生命 / 格挡）的镜像逻辑（不含补丁特性）。
 /// </summary>
 /// <remarks>
-/// <para>
-/// 引擎强制每个玩家各有一个 <c>Creature</c>（<c>CombatState.Players</c> 是从
-/// <c>PlayerCreatures.Select(c =&gt; c.Player)</c> 反推的），所以"一个身体"是靠**镜像**实现的：
-/// 谁的值变了，就把新值推给组里**其他所有成员**（共生体支持 2~4 人）。
-/// </para>
-/// <para>
-/// 三个值的收口都是同一种形状——<c>Block</c> / <c>CurrentHp</c> / <c>MaxHp</c> 的 private setter，
-/// 且都带 <c>if (旧值 != 新值)</c> 判断。补丁点唯一完备（构造函数是直接写字段、不走 setter），
-/// 而且天然收敛：值相等时 setter 直接返回，互相推不会无限递归（另有深度守卫兜底）。
-/// </para>
-/// <para>
-/// 于是"几个人同时起相同护甲"不需要任何特殊规则：各人打防御各加各的，池子累加，
-/// 正好等于原版多人局几人合计的格挡，而敌人打的也是同一个池。原版卡一行都不用改。
-/// </para>
+/// 引擎强制每人各有一个 <c>Creature</c>（<c>CombatState.Players</c> 由
+/// <c>PlayerCreatures.Select(c =&gt; c.Player)</c> 反推），所以"一个身体"靠**镜像**实现：
+/// 谁的值变了就推给组里其他所有成员（共生体支持 2~4 人）。
+/// 三个值的收口形状一致（<c>Block</c> / <c>CurrentHp</c> / <c>MaxHp</c> 的 private setter +
+/// <c>if (旧值 != 新值)</c>），补丁点唯一完备、天然收敛，深度守卫只是兜底。
+/// 于是"几个人各起一份护甲"不需要特殊规则：池子累加，正好等于原版多人局的合计格挡。
 /// </remarks>
 internal static class BodyMirror
 {
@@ -87,12 +79,7 @@ internal static class BodyMirror
         Mirror(() => PushMaxHp(source, target));
     }
 
-    /// <summary>
-    /// 召唤物专用：只推 生命上限 + 当前生命。
-    /// </summary>
-    /// <remarks>
-    /// 和身体那两条的区别：不做"一死一活拉平"（召唤物死了就是要死，推到 0 就是本体的死），也不推格挡。
-    /// </remarks>
+    /// <summary>召唤物专用：只推生命上限 + 当前生命（不做"一死一活拉平"，也不推格挡）。</summary>
     internal static void MirrorPetHp(Creature source, Creature target)
     {
         Mirror(() =>
@@ -107,10 +94,8 @@ internal static class BodyMirror
         Mirror(() => PushMaxHp(source, target));
     }
 
-    /// <summary>
-    /// 召唤物血量：死→活必须走 <c>HealInternal</c>（它会补 <c>Revived</c> 事件，界面靠它把召唤物重新显示出来），
-    /// 直接写字段只会让数据活了、画面还是空的。
-    /// </summary>
+    /// <summary>召唤物血量：死→活必须走 <c>HealInternal</c>（补 <c>Revived</c> 事件、界面靠它重新显示），
+    /// 直接写字段只会数据活了、画面还是空的。</summary>
     private static void PushPetHp(Creature from, Creature to)
     {
         if (from.CurrentHp == to.CurrentHp)
@@ -130,18 +115,14 @@ internal static class BodyMirror
     }
 
     /// <summary>
-    /// 让<b>本机</b>的召唤物节点立刻把"活着 + 血量"显示出来（对方召的 / 复活的也一样）。
+    /// 让<b>本机</b>的召唤物节点立刻显示"活着 + 血量"（对方召的 / 复活的也一样）。
     /// </summary>
     /// <remarks>
-    /// 召唤物在本体里只有一个生物节点（共享战斗状态），但存活状态与大小是画面自己缓存的：
-    /// 只在数据层把血写回去，另一侧窗口可能还停在"隐藏/空血"的样子。这里补一次显示刷新。
-    /// 节点找不到时只留一条诊断，方便判断"是不是这台机器压根没建这只召唤物的节点"。
-    /// </remarks>
-    /// <remarks>
-    /// <b>必须延到帧末做</b>：血量 setter 是在"伤害结算"的同步路径里被调的，这里直接动节点
-    /// （Tween / 重设显示）等于在结算中间插一次 UI 操作 —— 实测（22:15 log）P2 打出第三张牌后
-    /// 日志停在"playing card …"这一行、之后什么都没有（结算没走完），高度怀疑就是这条路径卡住。
-    /// 改成 <c>CallDeferred</c> 之后，节点刷新永远发生在当帧结算之外，最坏情况也只是"晚一帧显示"。
+    /// 召唤物只有一个生物节点（共享战斗状态），但存活状态与大小是画面自己缓存的：只在数据层写血，
+    /// 另一侧窗口可能还停在"隐藏/空血"。<b>必须延到帧末做</b>：血量 setter 在伤害结算的同步路径里，
+    /// 直接动节点（Tween / 重设显示）= 在结算中间插一次 UI 操作 —— 实测（22:15 log）P2 打出第三张牌后
+    /// 日志停在 "playing card …" 就没了。用 <c>CallDeferred</c> 后最坏只是晚一帧显示。
+    /// 节点找不到时留一条诊断，用于判断"这台机器压根没建这只召唤物的节点"。
     /// </remarks>
     private static void RefreshPetNode(Creature pet)
     {
@@ -158,8 +139,7 @@ internal static class BodyMirror
                         return;
                     }
 
-                    // 死掉的那只不要跟着血上限变大/缩小：它的显示交给"复活"流程负责。
-                    // （实测：镜像把血上限同步过去时，未复活的奥斯提也一起变大了。）
+                    // 死掉的那只不跟血上限变大/缩小（实测：未复活的奥斯提曾跟着一起变大），显示交给"复活"流程。
                     if (pet.IsDead)
                     {
                         return;
@@ -231,12 +211,11 @@ internal static class BodyMirror
     }
 
     /// <summary>
-    /// 一个死、一个活是<b>不可能态</b>（共享血池意味着所有人的血量永远相等、一起死）。
-    /// 真出现时说明镜像漏了一步，这里做修复：把低的一方拉平到高的一方。
+    /// 一死一活是<b>不可能态</b>（共享血池血量永远相等、一起死）；真出现说明镜像漏了一步，把低的一方拉平。
     /// </summary>
     /// <remarks>
-    /// 用 <c>HealInternal</c> 而不是直接写字段：它会走"从死到活"的正式流程
-    /// （<c>Player.ActivateHooks()</c> + <c>Revived</c> 事件），否则复活的玩家钩子仍然是关的。
+    /// 用 <c>HealInternal</c> 而非直接写字段：它走"从死到活"的正式流程
+    /// （<c>Player.ActivateHooks()</c> + <c>Revived</c>），否则复活的玩家钩子仍然是关的。
     /// </remarks>
     private static void RepairImpossibleLifeState(Creature from, Creature to)
     {
@@ -290,11 +269,9 @@ internal static class BodyStatMirrorPatch
             }
         }
 
-        // 召唤物（奥斯提这类"替你去死"的 pet）：两名成员各一只，血量必须一致 ——
-        // 打向主人的未格挡伤害会被本体改道到召唤物身上，两端不同步的话一边死了另一边还活着。
-        // 只推血量/上限；pet 上显示的格挡是"主人的格挡"，本体自己画，不跟着推。
-        // 召唤期间**不推**：这一波数值由本体自己处理（新建的就新建、已有的走 GainMaxHp），
-        // 镜像插手只会把"队友那次召唤"的结果抄回去、和本体语义打架（实测"5→5→再5→10 翻倍"）。
+        // 召唤物（奥斯提这类"替你去死"的 pet）：两成员各一只，血量必须一致，否则一边死一边活
+        // （打向主人的未格挡伤害会被本体改道到它身上）。只推血量/上限；pet 上的格挡是"主人的格挡"，本体自己画。
+        // 召唤期间**不推**：这一波由本体自己处理，镜像插手会把"队友那次召唤"的结果抄回去（实测 5→5→5→10 翻倍）。
         if (setter is "set_CurrentHp" or "set_MaxHp"
             && !PetSummonFanoutPatch.IsFanningOut
             && SummonMirror.PartnerOf(__instance) is { } counterpart)
@@ -315,21 +292,13 @@ internal static class BodyStatMirrorPatch
 /// 状态（powers）镜像的共享逻辑（不含补丁特性）。
 /// </summary>
 /// <remarks>
-/// <para>
 /// 关键事实：本体钩子是<b>全量广播</b>——<c>Hook.AfterCardPlayed</c> 就是
 /// <c>foreach (var model in combatState.IterateHookListeners())</c>，
 /// 每个能力都会收到战斗里发生的每一个事件，然后自己用 owner 判断要不要管，例如
 /// <c>PanachePower</c> 里那句 <c>if (cardPlay.Card.Owner != Owner.Player) return;</c>。
-/// </para>
-/// <list type="bullet">
-/// <item><description><see cref="PowerMirrorPolicy.Mirror" />（默认）：组里每个 creature 各挂一份，
-/// 每份只数自己的牌、只对自己的回合生效——**等价原版多人局**（每个人各买了一份能力）。</description></item>
-/// <item><description><see cref="PowerMirrorPolicy.SingleInstance" />：不复制，只留在被施加的那一侧。</description></item>
-/// </list>
-/// <para>
-/// <b>注意</b>：<c>SingleInstance</c> 只解决"只有一份"，不解决"这份要统计所有人的动作"。
-/// 后者要把该能力自己的 owner 判断放开，那是逐 power 的活。
-/// </para>
+/// <see cref="PowerMirrorPolicy.Mirror" />（默认）= 组里每个 creature 各挂一份、各数各的牌，等价原版多人局；
+/// <see cref="PowerMirrorPolicy.SingleInstance" /> = 只留一份。
+/// 注意后者只解决"只有一份"，不解决"这份要统计所有人的动作"（那要逐个放开该能力自己的 owner 判断）。
 /// </remarks>
 internal static class PowerMirror
 {
@@ -343,39 +312,89 @@ internal static class PowerMirror
         SingleInstance,
     }
 
-    /// <summary>逐能力策略覆写表，默认 <see cref="PowerMirrorPolicy.Mirror" />。</summary>
-    private static readonly Dictionary<Type, PowerMirrorPolicy> Overrides = new()
-    {
-        [typeof(PanachePower)] = PowerMirrorPolicy.SingleInstance,
-        [typeof(AfterimagePower)] = PowerMirrorPolicy.SingleInstance,
-        // 夜魇：内部数据（选中的那张牌）是 Nightmare.OnPlay 事后 SetSelectedCard 填的，
-        // 镜像出来的副本没有这份数据 → 副本在"下回合抽牌补 3 张复制品"时 card 为 null 直接 NRE、卡死。
-        // 实测 22:55 log：栈顶就是 NightmarePower.BeforeHandDraw。这类"数据靠模型自己填"的能力一律不复制。
-        [typeof(NightmarePower)] = PowerMirrorPolicy.SingleInstance,
-        // 模仿学习：本体靠 PlayerTarget 找"我自己挂的那一份副本"（Powers.OfType<…>().FirstOrDefault(s => s.PlayerTarget == …)），
-        // 而镜像出来的副本没有这份目标 → 命中错误的实例/空目标，直接崩。属于"副本缺目标/主人"这一类。
-        [typeof(ImitationLearningPower)] = PowerMirrorPolicy.SingleInstance,
-    };
+    /// <summary>
+    /// 逐能力策略覆写表（纠错出口），默认 <see cref="PowerMirrorPolicy.Mirror" />，<b>现在是空的</b>：
+    /// 带内部数据的能力（夜魇等）改由 <see cref="PowerPayload" /> 搬运，于是"所有能力都能镜像"。
+    /// 只有实测某能力镜像后<b>语义确实不对</b>时才往这里加一条。
+    /// </summary>
+    private static readonly Dictionary<Type, PowerMirrorPolicy> Overrides = [];
 
     private static int _mirrorDepth;
 
     /// <summary>
-    /// "这是镜像出来的副本"的标记表。
+    /// "这是镜像出来的副本"的标记表（弱键 <see cref="ConditionalWeakTable{TKey, TValue}" />，副本回收即自动消失）。
     /// </summary>
     /// <remarks>
-    /// 用弱键的 <see cref="ConditionalWeakTable{TKey, TValue}" />：副本被回收时条目自动消失，不用手工清理。
-    /// <b>为什么需要标记</b>：判断"别人身上有没有对应副本"是不行的——回合末第一个结算的副本会把自己
-    /// <b>和其他镜像一起删掉</b>，等派发轮到别的副本时"对应副本"已经空了，于是它照样又结算一次
-    /// （实测就是临时敏捷多掉一份、减益多掉一层）。标记是跟着对象走的，不受这种时序影响。
+    /// <b>不能用"别人身上有没有对应副本"来判断</b>：回合末第一个结算的副本会把自己和其他镜像一起删掉，
+    /// 轮到别的副本时"对应副本"已经空了 → 它照样又结算一次（实测临时敏捷多掉一份）。标记跟着对象走，不受时序影响。
     /// </remarks>
     private static readonly ConditionalWeakTable<PowerModel, object> MirrorCopies = new();
 
     private static readonly object MirrorMarker = new();
 
+    /// <summary>镜像副本 → 原件（派发前用它把原件的内部数据同步过来，见 <see cref="SyncMirrorPayload" />）。</summary>
+    /// <remarks>
+    /// 很多能力的数据是"施加<b>之后</b>"才由模型自己填的（夜魇的 <c>SetSelectedCard</c>），
+    /// 而镜像发生在 Apply 内部，克隆那一刻只能拿到空数据。
+    /// </remarks>
+    private static readonly ConditionalWeakTable<PowerModel, PowerModel> MirrorSources = new();
+
     /// <summary>这份能力是不是从别人身上镜像出来的副本。</summary>
     internal static bool IsMirrorCopy(PowerModel power)
     {
         return MirrorCopies.TryGetValue(power, out _);
+    }
+
+    /// <summary>派发钩子前刷新镜像副本的内部数据（对非副本、无原件的模型是空操作）。</summary>
+    internal static void SyncMirrorPayload(AbstractModel? model)
+    {
+        if (model is not PowerModel power || !MirrorSources.TryGetValue(power, out var source))
+        {
+            return;
+        }
+
+        PowerPayload.Sync(source, power);
+    }
+
+    /// <summary><paramref name="creator" /> 身上那个"产出了这张牌"的镜像副本（没有就返回 <c>null</c>）。</summary>
+    /// <remarks>
+    /// 用在"生成牌落到谁手里"的判定上（见 <c>GeneratedCardHandTargetPatch</c>）：镜像副本的内部数据是从原件
+    /// 搬来的，里面记的牌<b>属于原件宿主</b>，而本体 <c>AddGeneratedCardToCombat</c> 是按 <c>card.Owner</c>
+    /// 选目标堆的 —— 于是镜像副本产出的牌会跑进原件宿主的怀里（实测夜宴：p2 那份的 3 张复制牌全进 p1 手）。
+    /// 判据看的是<b>耐久事实</b>（这份是镜像副本 + 载荷里真的引用着这张牌），
+    /// <b>不是</b>"当前正在派发谁"——后者是个跨 <c>await</c> 会失真的瞬时状态（实测只对第一张生效，见补丁注释）。
+    /// </remarks>
+    internal static PowerModel? MirrorOriginOfGeneratedCard(Player creator, CardModel card)
+    {
+        if (creator.Creature is not { } creature)
+        {
+            return null;
+        }
+
+        // 顺着克隆链往上找：夜宴是"载荷里的那张牌 → 再克隆一张"，所以牌本身就是 CloneOf 那一环。
+        var chain = new List<CardModel>(4);
+        for (CardModel? current = card; current is not null && chain.Count < 4; current = current.CloneOf)
+        {
+            chain.Add(current);
+        }
+
+        foreach (var power in creature.Powers)
+        {
+            if (!IsMirrorCopy(power))
+            {
+                continue;
+            }
+
+            foreach (var candidate in chain)
+            {
+                if (PowerPayload.References(power, candidate))
+                {
+                    return power;
+                }
+            }
+        }
+
+        return null;
     }
 
     internal static PowerMirrorPolicy PolicyOf(PowerModel power)
@@ -386,83 +405,68 @@ internal static class PowerMirror
             return policy;
         }
 
-        // ② 统一规则：带“内部数据”的能力默认不镜像。
-        //    判据 = 该类型自己重写了 PowerModel.InitInternalData()（内部数据是施加后由模型另行填充的，
-        //    镜像出来的副本必然缺这份数据 —— 夜魇的 selectedCard 就是这么让副本在 BeforeHandDraw 崩掉的）。
-        //    自动判定覆盖原版与其它 mod 的全部能力，手工名单只用来纠正误判。
-        return HasInternalData(power) ? PowerMirrorPolicy.SingleInstance : PowerMirrorPolicy.Mirror;
+        // ② 怪施加的能力不镜像：本体怪招本来就"对每个玩家各施加一次"（撤销目标折叠后已恢复原状），
+        //    再镜像一份等于翻倍层数/持续时间；而且怪的能力也不需要"两人共用"。
+        if (power.Applier is { IsMonster: true })
+        {
+            return PowerMirrorPolicy.SingleInstance;
+        }
+
+        // ③ 其余（玩家打出的能力牌，含资源类）= 两人共用：镜像给组内每个成员。
+        //    资源类（下回合加费、往手牌补牌…）靠"两份各自消耗、不联删"（见 OnPowerRemoved）让双方都有收益，
+        //    内部数据由 PowerPayload 在派发前从原件补齐。
+        return PowerMirrorPolicy.Mirror;
     }
 
-    /// <summary>类型 → 是否带内部数据（重写了 InitInternalData）。</summary>
-    private static readonly Dictionary<Type, bool> InternalDataCache = [];
+    /// <summary>类型 → 是否重写了"私有资源族"钩子。</summary>
+    private static readonly Dictionary<Type, bool> PrivateResourceCache = [];
 
-    private static bool HasInternalData(PowerModel power)
+    /// <summary>这个能力改的是不是"每个玩家自己的资源"（能量 / 抽牌 / 手牌）＝一次性、各自消耗的那一类。</summary>
+    /// <remarks>
+    /// 判据 = 该类型<b>自己重写</b>了 <c>ModifyMaxEnergy</c> / <c>AfterEnergyReset</c> / <c>ModifyHandDraw</c> /
+    /// <c>AfterModifyingHandDraw</c> / <c>BeforeHandDraw</c> 之一（这些钩子逐个玩家调用）。
+    /// 它<b>不</b>决定"要不要镜像"（资源类也镜像），只决定：<b>不联删</b>（否则先开始回合的人把收益拿走）、
+    /// <b>不跟着改层数</b>（层数在施加那刻定下，同步会变成两边互相扣）。
+    /// </remarks>
+    private static bool TouchesPrivateResources(PowerModel power)
     {
         var type = power.GetType();
-        if (InternalDataCache.TryGetValue(type, out var cached))
+        if (PrivateResourceCache.TryGetValue(type, out var cached))
         {
             return cached;
         }
 
-        bool stateful;
+        bool touches;
         try
         {
-            // 依据（“以崩溃原因为基准”）＝ 副本会缺东西的两种信号：
-            //   ① 自己重写了 InitInternalData()（内部数据是施加后另行填充的，副本没有）；
-            //   ② 自己声明了“可写的 目标/主人 引用”（Player / Creature / CardModel）——
-            //      说明它记得某个人或某张牌（模仿学习的 PlayerTarget 就是这条）。
-            stateful = DeclaresInitInternalData(type) || DeclaresOwnerOrTargetMember(type);
+            touches = PrivateResourceHooks.Any(hook =>
+                type.GetMethod(hook, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+                    is { DeclaringType: { } declaring } && declaring == type);
         }
         catch (Exception)
         {
-            stateful = false;
+            touches = false;
         }
 
-        static bool DeclaresInitInternalData(Type t)
+        PrivateResourceCache[type] = touches;
+
+        if (touches)
         {
-            return t.GetMethod("InitInternalData", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public)
-                is { DeclaringType: { } declaring } && declaring == t;
+            Log.Info($"[together] power.mirror：{type.Name} → 资源类（两份各自消耗，不联删、不同步层数）");
         }
 
-        static bool DeclaresOwnerOrTargetMember(Type t)
-        {
-            const BindingFlags flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly;
-
-            foreach (var field in t.GetFields(flags))
-            {
-                if (!field.IsInitOnly && IsOwnerLike(field.FieldType))
-                {
-                    return true;
-                }
-            }
-
-            foreach (var property in t.GetProperties(flags))
-            {
-                if (property.CanWrite && IsOwnerLike(property.PropertyType))
-                {
-                    return true;
-                }
-            }
-
-            return false;
-        }
-
-        static bool IsOwnerLike(Type t)
-        {
-            return t == typeof(MegaCrit.Sts2.Core.Entities.Players.Player)
-                || t == typeof(MegaCrit.Sts2.Core.Entities.Creatures.Creature)
-                || t == typeof(MegaCrit.Sts2.Core.Models.CardModel);
-        }
-
-        InternalDataCache[type] = stateful;
-
-        if (stateful)
-        {
-            Log.Info($"[together] power.mirror：{type.Name} → 不镜像（带内部数据，副本会缺数据）");
-        }
-
-        return stateful;
+        return touches;
     }
+
+    /// <summary>私有资源族的钩子名（逐个玩家调用）。</summary>
+    private static readonly string[] PrivateResourceHooks =
+    [
+        "ModifyMaxEnergy",
+        "AfterEnergyReset",
+        "ModifyHandDraw",
+        "AfterModifyingHandDraw",
+        "BeforeHandDraw",
+    ];
 
     // ======================================================================
     // "同一个效果打到组里其他成员"的识别
@@ -489,13 +493,10 @@ internal static class PowerMirror
     /// <summary>认"同一个效果的第二次命中"的时间窗（本体逐个目标 Apply，两次之间只隔一点特效等待）。</summary>
     private const long SameEffectWindowMs = 5000;
 
-    /// <summary>
-    /// 记下"这个效果刚命中了某个成员"。
-    /// </summary>
+    /// <summary>记下"这个效果刚命中了某个成员"。</summary>
     /// <remarks>
-    /// 同类型 + 同施加者 + 同层数再次出现时：目标已经在名单里 = 这是**新一轮**效果（重置名单）；
-    /// 目标是组里<b>还没被命中过的</b>成员 = 同一个效果继续打到别人身上（只加名单）。
-    /// 这样 2~4 人的 AoE 减益都只会算一次。
+    /// 再次遇到"同类型 + 同施加者 + 同层数"时：目标已在名单里 = **新一轮**（重置名单）；
+    /// 目标是组里还没被命中过的成员 = 同一个效果继续打到别人身上（只加名单）。这样 2~4 人的 AoE 减益只算一次。
     /// </remarks>
     internal static void RecordApplication(PowerModel power, decimal amount, Creature? applier, Creature target)
     {
@@ -535,21 +536,13 @@ internal static class PowerMirror
         }
     }
 
-    /// <summary>
-    /// 这次施加是不是"同一个效果紧接着打到组里<b>另一个</b>成员"（是的话应当整个忽略）。
-    /// </summary>
+    /// <summary>这次施加是不是"同一个效果紧接着打到组里<b>另一个</b>成员"（是的话整个忽略）。</summary>
     /// <remarks>
-    /// <para>
-    /// 典型场景：同族神官的"脆弱宝珠"是 <c>PowerCmd.Apply&lt;FrailPower&gt;(…, targets, 1, 怪物, null)</c>——
-    /// 一次调用、目标里带着所有玩家。共享身体只有一副，这个减益<b>只该算一次</b>；
-    /// 但本体是逐个目标 Apply 的：先给锚点上 1 层，镜像把它克隆给其他成员，
-    /// 紧接着那些成员又被 Apply 一次——而它们身上已经有我们的克隆副本了，
-    /// 于是本体走"已有实例 → 加层数"这条路，变成 2 层（实测"减益双倍"）。
-    /// </para>
-    /// <para>
-    /// 判定用"类型 + 施加者 + 层数 + 目标是不是组里另一个还没被这次效果命中过的成员 + 时间窗"：
-    /// 同一位玩家连打两张同名卡时施加者不同、下个回合再被同一种减益打一次则是"新一轮效果"，都不会被误吞。
-    /// </para>
+    /// 典型场景：同族神官的"脆弱宝珠"一次 <c>PowerCmd.Apply&lt;FrailPower&gt;(…, targets, 1, 怪物, null)</c>
+    /// 带着所有玩家。共享身体只有一副，这个减益<b>只该算一次</b>；但本体逐个目标 Apply：给锚点上 1 层、
+    /// 镜像克隆给其他成员、紧接着成员又被 Apply 一次 → 本体走"已有实例 → 加层数"变成 2 层（实测"减益双倍"）。
+    /// 判定用"类型 + 施加者 + 层数 + 目标是组里另一个还没被这次效果命中的成员 + 时间窗"，
+    /// 所以连打两张同名卡（施加者不同）、下回合再吃同一减益（新一轮）都不会被误吞。
     /// </remarks>
     internal static bool IsSecondHitOfSameEffect(PowerModel power, decimal amount, Creature? applier, Creature target)
     {
@@ -607,9 +600,16 @@ internal static class PowerMirror
         {
             foreach (var other in owner.OthersOrEmpty())
             {
-                // MutableClone 会深拷 DynamicVars、把 _internalData 重新初始化、并把 _owner 置空，
-                // 所以克隆出来就是一份干净的、可以直接挂到另一个 creature 上的实例。
+                // MutableClone 深拷 DynamicVars、重初始化 _internalData 并置空 _owner，可直接挂到另一个 creature。
                 if (power.MutableClone() as PowerModel is not { } clone)
+                {
+                    continue;
+                }
+
+                // 本体的契约是"内部数据在克隆时被重置"（DeepCloneFields 里 `_internalData = InitInternalData()`），
+                // 而我们是替另一个宿主造副本、没有"重演填充过程"的机会 → 把原件那份搬过去（PowerPayload）。
+                // 搬不动就跳过这一份：宁可少一份，也不让副本拿着空数据去 NRE。
+                if (!PowerPayload.TryCopy(power, clone))
                 {
                     continue;
                 }
@@ -619,8 +619,10 @@ internal static class PowerMirror
                 // 打上"我是镜像副本"的标记（见 IsMirrorCopy 的注释）。
                 MirrorCopies.Add(clone, MirrorMarker);
 
-                // 本体对玩家侧的减益会顺手设 SkipNextDurationTick（"上减益的这一回合先不掉层"）。
-                // 克隆体是在那行之前造好的，得自己补上，否则共享身体上的减益会比原版多掉一层。
+                // 记住原件：副本的内部数据要在每次派发钩子前从它同步（PowerPayload.Sync）。
+                MirrorSources.Add(clone, power);
+
+                // 本体对玩家侧的减益会顺手设 SkipNextDurationTick（"上减益这回合先不掉层"），克隆体造在那行之前，得自己补上。
                 clone.SkipNextDurationTick = power.SkipNextDurationTick
                                              || (other.Side == CombatSide.Player && power.Type == PowerType.Debuff);
             }
@@ -641,6 +643,13 @@ internal static class PowerMirror
             || PolicyOf(power) != PowerMirrorPolicy.Mirror
             || owner.Player is not { } player
             || !TogetherPair.IsMember(player))
+        {
+            return;
+        }
+
+        // "每个玩家自己的资源"类能力（下回合加费、往手牌补牌…）是一次性的：一份被消耗不该连删另一份，
+        // 否则变成"先开始回合的人把收益拿走"（实测 p2 打「下回合加费」变成 p1 加费）。两份各自消耗 = 双方都有收益。
+        if (TouchesPrivateResources(power))
         {
             return;
         }
@@ -670,6 +679,12 @@ internal static class PowerMirror
             return;
         }
 
+        // 资源类（一次性）不跟着改层数：层数只在"施加"那刻定下、之后各份各自消耗，同步会变成"两边互相扣"。
+        if (TouchesPrivateResources(power))
+        {
+            return;
+        }
+
         _mirrorDepth++;
         try
         {
@@ -688,9 +703,7 @@ internal static class PowerMirror
         }
     }
 
-    /// <summary>
-    /// 在 <paramref name="to" /> 身上找 <paramref name="power" /> 对应的"第 N 份副本"。
-    /// </summary>
+    /// <summary>在 <paramref name="to" /> 身上找 <paramref name="power" /> 对应的"第 N 份副本"。</summary>
     /// <remarks>
     /// <c>PowerInstanceType.Instanced</c> 的能力可以有多个同类型实例，
     /// 所以按（类型，同类型内第几个）配对，而不是按类型唯一匹配。
@@ -761,13 +774,8 @@ internal static class PowerAmountMirrorPatch
     }
 }
 
-/// <summary>
-/// 叠层路径：同一个效果打到组里其他成员时整个忽略。
-/// </summary>
-/// <remarks>
-/// AoE 减益的后续命中走的是"已有实例 → 加层数"这条路（<c>ModifyAmount</c>），
-/// 不拦的话共享身体上的层数会翻倍。前缀同时负责"记一笔"，让下一次调用能认出同组成员。
-/// </remarks>
+/// <summary>叠层路径（<c>ModifyAmount</c>）：同一个效果打到组里其他成员时整个忽略，否则共享身体层数翻倍。
+/// 前缀同时负责"记一笔"，让下一次调用能认出同组成员。</summary>
 [HarmonyPatch(typeof(PowerCmd), nameof(PowerCmd.ModifyAmount), new[]
 {
     typeof(PlayerChoiceContext), typeof(PowerModel), typeof(decimal),
@@ -789,10 +797,8 @@ internal static class PowerSecondHitModifyAmountPatch
     }
 }
 
-/// <summary>
-/// 新建实例路径：同样是"同一个效果的另一半/其他人"就整个忽略
-/// （万一镜像没成功、别人身上还没有副本，这一步能避免本体再加一份实例）。
-/// </summary>
+/// <summary>新建实例路径（<c>Apply</c>）：同样是"同一效果的另一半/其他人"就整个忽略
+/// （万一镜像没成功，这一步避免本体再加一份实例）。</summary>
 [HarmonyPatch(typeof(PowerCmd), nameof(PowerCmd.Apply), new[]
 {
     typeof(PlayerChoiceContext), typeof(PowerModel), typeof(Creature), typeof(decimal),
@@ -813,36 +819,19 @@ internal static class PowerSecondHitApplyPatch
     }
 }
 
-/// <summary>
-/// 金币共享（可选）：组内只有一个钱包。
-/// </summary>
+/// <summary>金币共享（可选）：组内只有一个钱包。</summary>
 /// <remarks>
-/// <para>
-/// 本体的金币收口只有一处 —— <c>Player.Gold</c> 的 setter（<c>PlayerCmd.GainGold</c> / <c>LoseGold</c> /
-/// <c>SetGold</c> 最终都是给这个属性赋值，并且会触发 <c>GoldChanged</c> 让顶栏刷新）。
-/// 所以这里只挂 setter 的 Postfix：谁的钱变了就把同一个数值推给组里其他人。
-/// </para>
-/// <para>
-/// 收敛性靠本体自己的判断：<c>if (value != Gold)</c> 才赋值，所以"值相同就不再触发"，不会来回推。
-/// 另外还有一层重入守卫兜底。
-/// </para>
-/// <para>
-/// <b>新开一局</b>时把所有人的起始金币<b>加起来</b>当共同余额（99 × 人数）；
-/// 读档 / 重连只做"取最大值对齐"（存档里本来就是同一份，再求一次和就是每次重连都翻倍）。
-/// 关掉这个开关时完全不管金币。
-/// </para>
+/// 金币收口只有一处 —— <c>Player.Gold</c> 的 setter（<c>GainGold</c>/<c>LoseGold</c>/<c>SetGold</c>
+/// 最终都给它赋值并触发 <c>GoldChanged</c> 刷新顶栏），所以只挂 setter 的 Postfix：谁的钱变了就推给组里其他人。
+/// 收敛性靠本体的 <c>if (value != Gold)</c>，另有一层重入守卫兜底。
+/// <b>新开一局</b>把所有人起始金币<b>加起来</b>当共同余额（99 × 人数）；读档/重连只"取最大值对齐"
+/// （存档里本来就是同一份，再求和会每次重连都翻倍）。开关关掉时完全不管金币。
 /// </remarks>
 internal static class GoldMirror
 {
     private static int _depth;
 
-    /// <summary>
-    /// 成组时对齐金币。
-    /// </summary>
-    /// <param name="isNewRun">
-    /// 是不是新开一局。新局把所有人的起始金币<b>加起来</b>（99 × 人数）当共同余额；
-    /// 读档 / 重连只取组内最大值对齐。
-    /// </param>
+    /// <summary>成组时对齐金币。<paramref name="isNewRun" /> = 新局求和（99 × 人数），否则取组内最大值对齐。</summary>
     public static void OnArm(bool isNewRun)
     {
         if (!TogetherSettingsSync.EffectiveShareGold || !TogetherPair.IsActive)
@@ -934,14 +923,10 @@ internal static class GoldMirrorPatch
     }
 }
 
-/// <summary>
-/// 消费路径的双保险：<c>PlayerCmd.LoseGold</c>（商店买卡/删牌、事件扣钱都走它）。
-/// </summary>
+/// <summary>消费路径的双保险：<c>PlayerCmd.LoseGold</c>（商店买卡/删牌、事件扣钱都走它）。</summary>
 /// <remarks>
-/// 本体所有金币变化的收口确实是 <c>Player.Gold</c> 的 setter，上面那个补丁理论上已经覆盖；
-/// 这里再挂一条的原因很实际：<c>LoseGold</c> 是本体的"扣钱"语义入口，一旦将来有哪条扣钱路径
-/// 绕过 setter（或者 setter 那条补丁因为别的原因没跑到），这条能兜住。
-/// 两个补丁都是幂等的（值相同不会重复推）。
+/// setter 那条理论上已覆盖，这里再挂一条是兜底：将来若有扣钱路径绕过 setter（或 setter 补丁没跑到）也能接住。
+/// 两个补丁都幂等（值相同不重复推）。
 /// </remarks>
 [HarmonyPatch(typeof(PlayerCmd), nameof(PlayerCmd.LoseGold))]
 internal static class LoseGoldMirrorPatch

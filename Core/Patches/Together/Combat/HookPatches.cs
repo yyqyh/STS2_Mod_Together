@@ -15,37 +15,23 @@ namespace Together.Core.Patches.Combat;
 /// 于是"每回合一次"的卡牌/附魔效果触发两遍。
 /// </summary>
 /// <remarks>
-/// <para>
 /// 两处派发源头都要去重，因为两边都会重复：
-/// </para>
-/// <list type="bullet">
-/// <item><description>
 /// <c>CombatState.IterateHookListeners</c> 是按 creature 逐个收集的：先加
 /// <c>creature.Powers</c>，再加那名玩家的遗物/药水/宝珠，最后把
 /// <c>player.PlayerCombatState.AllPiles</c> 里每张牌（连同它的 Affliction / Enchantment）塞进列表。
 /// 共享牌库下回声的 <c>AllPiles</c> 指向的正是锚点那几口堆（见 <see cref="SharedPileImpl" />），
-/// 所以同一张牌会被收集两次、派发两次。
-/// </description></item>
-/// <item><description>
+/// 所以同一张牌会被收集两次、派发两次；
 /// <c>RunState.IterateHookListeners</c> 里是 <c>foreach (player) foreach (card in player.Deck.Cards)</c>，
 /// 而回声的 <c>Deck</c> 重定向到锚点那一份 —— 主卡组的每张牌同样会被收集两次。
-/// </description></item>
-/// </list>
-/// <para>
 /// 实测症状：<c>Imbued</c>（注能）在回合开始把牌自动打出<b>两次</b>；
 /// 更要命的是第二次派发常常发生在选择界面/动画中间，把战斗循环卡住（表现为黑屏不动）。
-/// </para>
-/// <para>
 /// 去重必须按<b>引用</b>比对：模型类的 <c>Equals</c> 有可能按 Id 比较，
 /// 按值去重会把"两张同名牌"错当成一张（那会漏派发一张牌的所有钩子）。
 /// 原版对局里各玩家的牌堆互不相交、监听表本来就没有重复项，所以这个补丁在单人/原版联机下是空操作。
-/// </para>
-/// <para>
 /// <b>注意</b>：这里<b>只</b>去重，不去过滤"镜像副本"。
 /// 曾经试过在回合族钩子里统一丢掉镜像副本，但那会连带把"每回合重置的内部计数"也一起丢掉
 /// （实测杂耍计数整局不重置），所以那种"会改身体数值"的少数能力改成逐类处理
-/// （见 <see cref="MirroredTemporaryPowerGuard" />）。
-/// </para>
+/// （见 <see cref="MirroredPowerSingleFirePatch" />）。
 /// </remarks>
 internal static class HookListenerDedupe
 {
@@ -69,10 +55,23 @@ internal static class HookListenerDedupe
                     + "（共享牌堆 / 共享主卡组被两个成员各枚举了一次）");
             }
 
-            return distinct;
+            return distinct.Select(SyncMirrorPayload);
         }
 
-        return listeners.Distinct<AbstractModel>(ReferenceComparer.Instance);
+        return listeners.Distinct<AbstractModel>(ReferenceComparer.Instance).Select(SyncMirrorPayload);
+    }
+
+    /// <summary>枚举到某个监听者时，如果它是镜像副本，先把原件那边的内部数据同步过来。</summary>
+    /// <remarks>
+    /// 时机很关键：很多能力的内部数据是"施加<b>之后</b>"才由模型自己填的
+    /// （夜魇的 <c>SetSelectedCard</c> 就在 <c>PowerCmd.Apply(...)</c> 返回之后），
+    /// 而镜像发生在 Apply <b>内部</b> —— 克隆那一刻副本拿到的还是空数据。
+    /// 这次枚举正好发生在"钩子即将被调用"之前，所以在这里同步一次最合适。
+    /// </remarks>
+    private static AbstractModel SyncMirrorPayload(AbstractModel model)
+    {
+        PowerMirror.SyncMirrorPayload(model);
+        return model;
     }
 
     /// <summary>引用相等的比较器（理由见类型注释：按 Id 去重会误伤同名牌）。</summary>

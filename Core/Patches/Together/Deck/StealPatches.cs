@@ -25,19 +25,13 @@ using Together.Core.Content;
 
 namespace Together.Core.Patches.Deck;
 
-/// <summary>
-/// 草蜢偷多张牌：把"被偷的牌"从单张改成列表，死亡时逐张还回去。
-/// </summary>
+/// <summary>草蜢偷多张牌：把"被偷的牌"从单张改成列表，死亡时逐张还回去。</summary>
 /// <remarks>
-/// <para>
 /// 本体 <c>SwipePower</c> 只有一个 <c>StolenCard</c> 槽：偷第二张会把第一张覆盖掉，
 /// 于是显示只看得到最后一张，<c>BeforeDeath</c> 也只还最后一张（其余永久丢失）。
-/// </para>
-/// <para>
 /// 这里用旁表记住每次 <c>Steal</c> 的 (牌, 被偷方)，并接管 <c>BeforeDeath</c>：
 /// 对每一张 <c>DeckVersion != null</c> 的牌做"加回卡组 + 取回奖励 + 标记已归还"，
 /// 卡不掉的那张（战斗中生成的牌没有 DeckVersion）只记日志。
-/// </para>
 /// </remarks>
 internal static class StolenCards
 {
@@ -81,14 +75,11 @@ internal static class StealRecordPatch
 [HarmonyPatch(typeof(SwipePower), nameof(SwipePower.BeforeDeath))]
 internal static class StealReturnAllPatch
 {
-    /// <summary>
-    /// 【已退回 A】归还<b>完全交回本体</b>。
-    /// </summary>
+    /// <summary>【已退回 A】归还<b>完全交回本体</b>。</summary>
     /// <remarks>
     /// 我们"逐张归还"试过两种入口（<c>RunState.AddCard(card, victim)</c> → 按人登记、与共享卡组对不上；
     /// 改成 <c>CardPileCmd.Add(card, Deck)</c> → 仍然崩），说明问题不止在入口，所以先把归还整段退回本体：
     /// <b>不碰任何记账，只保证不崩</b>。代价是本体只还会它自己记住的那一张（多张里的其余暂时不还）。
-    /// 等"分叉"这条根问题彻底解决后，再考虑多张归还。
     /// </remarks>
     [HarmonyPrefix]
     private static bool Prefix(SwipePower __instance, Creature target)
@@ -118,9 +109,7 @@ internal static class StealSession
         _index = 0;
     }
 
-    /// <summary>
-    /// 第 N 次偷牌该记在谁头上：**按偷牌顺序轮流分配成员**（1→锚点，2→回声…）。
-    /// </summary>
+    /// <summary>第 N 次偷牌该记在谁头上：**按偷牌顺序轮流分配成员**（1→锚点，2→回声…）。</summary>
     /// <remarks>
     /// 不用"取候选时记一笔"那种信号：本体某位成员如果抽/弃牌堆里没牌就会跳过那一遍，
     /// 队列会错位。按"第几次真的偷到了牌"轮流分配，和 `targets` 的顺序天然一致，两端也算得一样。
@@ -149,9 +138,7 @@ internal static class StealSession
     }
 }
 
-/// <summary>
-/// 草蜢偷牌（<c>ThieveryMove</c>）：把 <c>targets</c> 补成"共生体全部成员的 creature"。
-/// </summary>
+/// <summary>草蜢偷牌（<c>ThieveryMove</c>）：把 <c>targets</c> 补成"共生体全部成员的 creature"。</summary>
 /// <remarks>
 /// 本体是 <c>foreach (target in targets)</c> 每人偷一张；共享身体下 targets 通常只有锚点，
 /// 所以永远只偷一张、也只记锚点。补成全部成员后：每个成员各偷一张（来源仍是共享抽/弃牌堆，蓝卡优先照旧），
@@ -160,10 +147,8 @@ internal static class StealSession
 [HarmonyPatch]
 internal static class ThieveryMoveTargetsPatch
 {
-    /// <summary>
-    /// 草蜢本体 + 所有**自己声明了** <c>ThieveryMove</c> 的派生类型（变体怪会覆写它，
-    /// 只挂基类的话虚分派根本走不到我们的补丁 —— 实测"没偷 P2"就是这个原因）。
-    /// </summary>
+    /// <summary>草蜢本体 + 所有**自己声明了** <c>ThieveryMove</c> 的派生类型（变体怪会覆写它，只挂基类的话虚分派
+    /// 根本走不到我们的补丁 —— 实测"没偷 P2"就是这个原因）。</summary>
     private static IEnumerable<MethodBase> TargetMethods()
     {
         var baseType = typeof(ThievingHopper);
@@ -269,10 +254,9 @@ internal static class StealVictimApplyPatch
             if (card is not null && !LocalContext.IsMine(card)
                 && NCombatRoom.Instance?.GetCreatureNode(__instance.Owner) is { } hopperNode)
             {
-                var marker = hopperNode.GetSpecialNode<Marker2D>("%StolenCardPos");
-                if (marker is not null)
+                if (hopperNode.GetSpecialNode<Marker2D>("%StolenCardPos") is { } marker
+                    && NCard.Create(card) is { } nCard)
                 {
-                    var nCard = NCard.Create(card);
                     marker.AddChildSafely(nCard);
                     nCard.Position += nCard.Size * 0.5f;
                     nCard.UpdateVisuals(PileType.Deck, CardPreviewMode.Normal);

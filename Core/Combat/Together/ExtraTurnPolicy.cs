@@ -10,23 +10,17 @@ namespace Together.Core.Combat;
 /// 额外回合策略（项目决定）：<b>额外回合不清共享状态</b>（佩尔之眼等）。
 /// </summary>
 /// <remarks>
-/// <para>
 /// 本体 <c>Creature.AfterTurnStart</c> 会调 <c>ClearBlock()</c>，而额外回合只会让拿到额外回合的那个人参与
 /// StartTurn（<c>CombatManager.IsPartOfPlayerTurn</c> 对其他人返回 false）。共享格挡下这意味着
 /// "p1 拿额外回合 → 把 p2 攒的格挡也一起清掉"，所以规则是：<b>有玩家在打额外回合时不清共享格挡</b>。
-/// </para>
-/// <para>
 /// <b>跳过一个 async 方法，必须自己把 Task 还回去</b>：<c>AfterTurnStart</c> / <c>ClearBlock</c> 都是
 /// <c>async Task</c>，Harmony 前缀返回 false 时 <c>__result</c> 保持默认值 <c>null</c>，
 /// 调用方 <c>await</c> 一个 null Task 立刻 NRE —— 表现就是"额外回合刚开始，回合循环就死了、战斗卡住"
 /// （2026-09-22 log：<c>Combat #2 turn loop died … NullReferenceException at CombatManager.StartTurn</c>，
 /// 抛在 <c>await item3.AfterTurnStart(...)</c> 这一行）。所以下面两条都自己还 Task。
-/// </para>
-/// <para>
 /// <b>单人局必须保持本体行为</b>：这两条规则是为了"共享格挡"才成立的（清格挡会把另一半攒的也清掉），
 /// 所以先用 <see cref="TogetherPair.IsActive" /> 把非配对局挡在外面 —— 否则单人局拿佩尔之眼时
 /// 额外回合不清格挡，那是偏离本体的。
-/// </para>
 /// </remarks>
 [HarmonyPatch(typeof(Creature), nameof(Creature.AfterTurnStart))]
 internal static class ExtraTurnSkipAfterTurnStartPatch

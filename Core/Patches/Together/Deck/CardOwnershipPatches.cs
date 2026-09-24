@@ -23,43 +23,30 @@ namespace Together.Core.Patches.Deck;
 /// M1：卡牌归属（owner）的维护规则。
 /// </summary>
 /// <remarks>
-/// <para>
 /// 规则一句话：<b>牌归"它当前所在手牌"的主人；不在手牌里的牌保留自然归属，不再改写。</b>
-/// </para>
-/// <para>
-/// 为什么<b>不能</b>把共享堆（抽牌堆/弃牌堆/消耗堆）里的牌统一改成锚点：本体有二十多处逻辑是拿
+/// <b>为什么不能把共享堆（抽牌堆/弃牌堆/消耗堆）里的牌统一改成锚点</b>：本体有二十多处逻辑拿
 /// <c>card.Owner</c> 认领"这张牌是不是我的"——<c>JossPaper</c>（金纸）、<c>CharonsAshes</c>（卡戎之灰）、
 /// <c>ForgottenSoul</c>、<c>BurningSticks</c>、<c>Tingsha</c>、<c>ToughBandages</c>、
 /// <c>BansheesCry</c>、<c>PanachePower</c>、<c>GravityPower</c>、<c>JugglingPower</c>、<c>HexPower</c>……
 /// 一旦归一，这些"我的牌"判据会统统算到锚点头上：回声的遗物/能力永远不计数、锚点的会多计数。
-/// </para>
-/// <para>
 /// 当初要归一的唯一硬理由，是本体批量 <c>CardPileCmd.Add</c> 里那条"同一次调用里所有牌 owner 必须一致"的校验
 /// （洗牌就是"弃牌堆 + 抽牌堆"一次批量 Add，否则抛
 /// <c>Tried to add cards with different owners to the same pile!</c>）。那条校验的前提是
 /// "每个玩家的牌堆各自独立"，在共享牌库下根本不成立——所以正解是让<b>那条校验失效</b>
 /// （见 <see cref="DifferentOwnersCheckPatch" />），而不是反过来改牌的归属去迎合它。
-/// </para>
-/// <para>
-/// 仍然必须保留的一条是"<b>进手牌就归手牌主人</b>"（见 <see cref="HandOwnershipInvariantPatch" /> 与
+/// 仍然保留的一条是"<b>进手牌就归手牌主人</b>"（见 <see cref="HandOwnershipInvariantPatch" /> 与
 /// <see cref="CardOwnershipImpl.NormalizeForHand" />）：本体的手牌类效果大量用 <c>card.Owner</c> 反推
 /// "这是谁的手牌 / 该谁抽牌"，手牌里混进别人的牌会直接错位。
-/// </para>
-/// <para>
-/// 改归属用的 API 是本体自己留的那条路（"有主不可改"的唯一例外）：
+/// 改归属走本体自己留的那条路（"有主不可改"的唯一例外）：
 /// <c>CardModel.GiveToAnotherPlayer</c>，也就是本体 <c>CardPileCmd.GiveToAnotherPlayer</c> 用的同一套。
-/// </para>
 /// </remarks>
 internal static class CardOwnershipImpl
 {
-    /// <summary>
-    /// 进手牌：把牌改成手牌主人。
-    /// </summary>
+    /// <summary>进手牌：把牌改成手牌主人。</summary>
     /// <remarks>
-    /// 必须<b>先</b>把牌从原堆摘出来、<b>再</b>改 owner——顺序照抄本体
-    /// <c>CardPileCmd.GiveToAnotherPlayer</c>。
-    /// 反过来做的话，<c>Add</c> 内部要靠 <c>card.Pile</c> 摘除时 owner 已经变了、
-    /// 牌在新 owner 的堆里找不到自己，摘除会静默失败 → 牌同时留在原堆和新堆里。
+    /// 必须先摘牌、再改 owner（顺序照抄本体 <c>CardPileCmd.GiveToAnotherPlayer</c>）：反过来 <c>Add</c>
+    /// 内部靠 <c>card.Pile</c> 摘除时 owner 已经变了、牌在新 owner 的堆里找不到自己，摘除静默失败
+    /// → 牌同时留在原堆和新堆里。
     /// </remarks>
     internal static void NormalizeForHand(CardModel card, CardPile hand)
     {
@@ -137,27 +124,18 @@ internal static class CardOwnerSinglePatch
 /// 打掉批量 <c>CardPileCmd.Add</c> 里那条"同批 owner 必须一致"的校验，让共享牌堆里的牌保持<b>自然归属</b>。
 /// </summary>
 /// <remarks>
-/// <para>
 /// <b>配对局里这条是必须装上的</b>。那条校验的前提是"每个玩家的牌堆各自独立"：共享牌库下，
-/// 共享的弃牌堆／抽牌堆
-/// 本来就该同时装着两个人的牌，而<b>洗牌</b>正是"把弃牌堆混进抽牌堆"的批量 Add ——
+/// 共享的弃牌堆／抽牌堆本来就该同时装着两个人的牌，而<b>洗牌</b>正是"把弃牌堆混进抽牌堆"的批量 Add ——
 /// 一旦抛 <c>…different owners…</c>，<b>回合循环直接终止、战斗卡住</b>。
-/// </para>
-/// <para>
 /// 曾经的临时办法是"把共享堆里牌的 owner 统一改成锚点"去迎合这条校验，效果是连带出两个问题：
-/// <list type="bullet">
-/// <item><description><b>幽灵卡</b>：<c>CardModel.Pile</c> 按 owner 反查堆，owner 被改写之后反查失效。</description></item>
-/// <item><description><b>变牌失败</b>：<c>CardCmd.Transform</c> 要求替换卡与原卡 owner 一致，owner 不再唯一对应"牌属于谁"就撞上。</description></item>
-/// <item><description><b>"我的牌"判据集体失效</b>：金纸/卡戎之灰/探戈/绷带……全按 <c>card.Owner</c> 认领，归一后统统算到锚点头上。</description></item>
-/// </list>
+/// <b>幽灵卡</b>（<c>CardModel.Pile</c> 按 owner 反查堆，owner 被改写之后反查失效）、
+/// <b>变牌失败</b>（<c>CardCmd.Transform</c> 要求替换卡与原卡 owner 一致）、
+/// <b>"我的牌"判据集体失效</b>（金纸/卡戎之灰/探戈/绷带……全按 <c>card.Owner</c> 认领，归一后算到锚点头上）。
 /// 所以归一路线已经撤掉，这里让这条校验失效即为其正解。
-/// </para>
-/// <para>
 /// <b>关键点（上一版失败的原因）</b>：<c>Add</c> 是 <c>async</c> 方法，Harmony 的 transpiler
 /// 默认打在<b>存根</b>上（只有"创建状态机"那几条指令），真实代码在编译器生成的
 /// <c>CardPileCmd+&lt;Add&gt;d__N.MoveNext</c> 里。所以必须显式把目标指到状态机的 <c>MoveNext</c>。
 /// （日志里能看到别的 mod 也在打 <c>&lt;Add&gt;d__10.MoveNext</c>，佐证了这一点。）
-/// </para>
 /// </remarks>
 [HarmonyPatch]
 internal static class DifferentOwnersCheckPatch
@@ -265,28 +243,20 @@ internal static class DifferentOwnersCheckPatch
 /// 手牌归属不变量：<b>在谁手里就归谁</b>。
 /// </summary>
 /// <remarks>
-/// <para>
 /// 为什么要在数据层强制这件事：本体不少"手牌类"效果是拿<b>卡牌自己的 owner</b> 去推
 /// "这是谁的手牌 / 该谁抽牌"的。例如 <c>CalculatedGamble</c>（计算下注）里
 /// <c>PileType.Hand.GetPile(base.Owner).Cards</c> 取的是 owner 的手牌，
 /// 而 <c>CardCmd.DiscardAndDraw</c> 干脆用 <c>discardCards[0].Owner</c> 决定"谁抽牌"。
-/// </para>
-/// <para>
 /// 一旦手牌里混进 owner 不是手牌主人的牌（读档恢复、效果搬运等路径都可能这样），
 /// 就会出现"p2 打计算下注，却把 p1 的手牌弃掉、并让 p1 抽牌"这种错位 ——
 /// 表现就是"p2 的计算下注不能正确抽牌"。
-/// </para>
-/// <para>
 /// 修法是在牌<b>进手牌</b>的那一刻（<c>CardPile.AddInternal</c>）就把 owner 对齐到该手牌的主人。
 /// 这里是原地改 owner、<b>不</b>像 <see cref="CardOwnershipImpl.NormalizeForHand" /> 那样先摘牌：
 /// 牌已经躺在这口手牌里了，新主人的堆集合里就有这口堆，<c>card.Pile</c> 依然找得到它，
 /// 不会出现"牌同时挂在两处"。
-/// </para>
-/// <para>
 /// 这是<b>唯一</b>还在改写 owner 的地方：离手之后一律保留自然归属（"这张牌是谁的"）。
 /// 共享堆因此会同时装着两个人的牌，批量 <c>CardPileCmd.Add</c> 的那条同 owner 校验由
 /// <see cref="DifferentOwnersCheckPatch" /> 打掉。
-/// </para>
 /// </remarks>
 [HarmonyPatch(typeof(CardPile), nameof(CardPile.AddInternal))]
 internal static class HandOwnershipInvariantPatch
@@ -322,11 +292,8 @@ internal static class HandOwnershipInvariantPatch
 /// "从共享堆拿牌回手"这一类效果的归属修正。
 /// </summary>
 /// <remarks>
-/// <para>
 /// 症状：捏奥之怒（NeowsFury）/挖掘（Dredge）/全息影像（Hologram）等从弃牌堆选牌回手时，
 /// 弃牌堆确实少了几张，但牌<b>没有进自己的手牌</b>。
-/// </para>
-/// <para>
 /// 原因：这类效果的目标手牌是本体<b>用卡牌自己的 owner 推出来的</b> ——
 /// CardPileCmd.Add(cards, PileType.Hand, …) 内部走的是
 /// <c>PileType.Hand.GetPile(cards.First().Owner)</c>。
@@ -335,18 +302,13 @@ internal static class HandOwnershipInvariantPatch
 /// 牌从回声的屏幕上消失，却跑进另一个人手里去了。
 /// （反过来若进了自己的手但 owner 不是自己，界面又会因为 LocalContext.IsMe(card.Owner)
 /// 不为真而不给这张牌建手牌节点 —— 同样是"看不见"。）
-/// </para>
-/// <para>
 /// 解法：在搬运之前，把这批"从共享堆回手"的牌先改成<b>当前正在结算效果的那名玩家</b>，
 /// 本体随后用 owner 推出的目标手牌就是他自己那口。判定"正在结算效果的人"用本体自己的
 /// CombatManager.BeginCardOrPotionEffect / EndCardOrPotionEffect 深度计数
 /// （它就在 finally 里配对，比我们自己去挂"开始出牌/结束出牌"稳），
 /// 再要求两名配对玩家中<b>只有一个人</b>在执行效果 —— 嵌套效果（两个都在执行）时不猜，保持原版行为。
-/// </para>
-/// <para>
 /// 只改 <c>PileType.Hand</c> 这一类目标：其余堆（抽/弃/消耗/出牌/卡组）在配对里本来就是同一份，
 /// 用谁当 owner 推出来的都是同一个堆，没必要碰。
-/// </para>
 /// </remarks>
 internal static class HandReturnOwnership
 {
@@ -393,9 +355,7 @@ internal static class HandReturnOwnership
         return acting;
     }
 
-    /// <summary>
-    /// 这批牌要进"当前效果执行者的手牌"→ 先把它们改成那个人，本体随后自己会推出正确的目标堆。
-    /// </summary>
+    /// <summary>这批牌要进"当前效果执行者的手牌"→ 先把它们改成那个人，本体随后自己会推出正确的目标堆。</summary>
     /// <returns>是否真的做了改写。</returns>
     public static bool RetargetToActingHand(IReadOnlyList<CardModel> cards)
     {
@@ -453,13 +413,10 @@ internal static class HandReturnOwnership
         return true;
     }
 
-    /// <summary>
-    /// 目标堆是明确给出的手牌堆时，把牌改成该手牌的主人。
-    /// </summary>
+    /// <summary>目标堆是明确给出的手牌堆时，把牌改成该手牌的主人。</summary>
     /// <remarks>
-    /// 和单张路径的 CardOwnershipImpl.NormalizeForHand 同一个规则，
-    /// 但<b>只对"不在任何手牌里"的牌动手</b>：正在某人手牌里的牌如果被改写 owner，
-    /// 那边的 NPlayerHand 会认不出它（幽灵卡）。
+    /// 和单张路径的 CardOwnershipImpl.NormalizeForHand 同一个规则，但<b>只对"不在任何手牌里"的牌动手</b>：
+    /// 正在某人手牌里的牌如果被改写 owner，那边的 NPlayerHand 会认不出它（幽灵卡）。
     /// </remarks>
     public static void NormalizeIntoHand(CardModel card, CardPile hand)
     {
@@ -484,9 +441,7 @@ internal static class HandReturnOwnership
     }
 }
 
-/// <summary>
-/// 记录"最近一次从战斗牌堆里选牌的是谁、选的是哪个堆"。
-/// </summary>
+/// <summary>记录"最近一次从战斗牌堆里选牌的是谁、选的是哪个堆"。</summary>
 /// <remarks>
 /// 本体那些"从抽牌堆/弃牌堆选牌回手"的效果都先走
 /// <c>CardSelectCmd.FromCombatPile(context, pile, player, prefs)</c>，其中 <c>player</c> 就是发起者。
@@ -509,7 +464,7 @@ internal static class SelectedFromPile
     /// <summary>这批牌确实来自刚才那次选牌的那个堆 → 返回当时的发起者。</summary>
     public static Player? PlayerFor(IReadOnlyList<CardModel> cards)
     {
-        if (_player is null || _pile is null || !TogetherPair.IsPaired(_player))
+        if (_player is null || _pile is null || !TogetherPair.IsMember(_player))
         {
             return null;
         }

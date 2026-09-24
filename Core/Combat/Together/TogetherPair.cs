@@ -19,15 +19,11 @@ namespace Together.Core.Combat;
 /// 共生体的「成员注册表」：谁是锚点、谁是回声。
 /// </summary>
 /// <remarks>
-/// <para>
 /// <b>锚点（<see cref="Anchor" />）</b>是权威实例持有者——主卡组与四个战斗牌堆都挂在它身上；
 /// <b>回声（<see cref="Echoes" />）</b>是组里其他人，访问入口被重定向到锚点，但手牌与能量保持独立。
 /// 人数由设置里的"共生体人数上限"决定（2~4），实际人数 = 选人界面按了「共生体」的人数（≥2 即成组）。
-/// </para>
-/// <para>
-/// <b>为什么不用 <c>LocalContext</c> 之类的本机视角来决定锚点</b>：两端必须算出同一个答案，
-/// 否则第一次抽牌就会分叉。<c>RunState.Players</c> 的顺序来自大厅，两端天然一致，也会写进存档。
-/// </para>
+/// <b>不用 <c>LocalContext</c> 之类的本机视角来决定锚点</b>：两端必须算出同一个答案，否则第一次抽牌就分叉；
+/// <c>RunState.Players</c> 的顺序来自大厅，两端天然一致，也会写进存档。
 /// </remarks>
 internal static class TogetherPair
 {
@@ -46,34 +42,24 @@ internal static class TogetherPair
     private static readonly AccessTools.FieldRef<Player, CardPile[]?> RunPileCache =
         AccessTools.FieldRefAccess<Player, CardPile[]?>("_runPiles");
 
-    /// <summary>
-    /// <c>Player.Deck</c> 是 get-only 自动属性，这里直接拿到它的 backing field。
-    /// </summary>
+    /// <summary><c>Player.Deck</c> 是 get-only 自动属性，直接换它的 backing field。</summary>
     /// <remarks>
-    /// 为什么必须换字段、而不能只改 getter：界面（顶部卡组按钮、卡组界面）会在初始化时
-    /// 抓一次 <c>PileType.Deck.GetPile(player)</c> 把 <c>CardPile</c> 引用存进自己的字段里，
-    /// 之后只看那个引用。只重定向 getter 的话，这份"旧引用"永远是回声自己的卡组
-    /// （实测就是"p2 只显示 9 张初始卡"）。把字段换掉之后，此后任何一次读取——
-    /// 无论走不走 getter——拿到的都是锚点那份卡组。
+    /// 必须换字段、不能只改 getter：界面（顶部卡组按钮、卡组界面）初始化时会抓一次
+    /// <c>PileType.Deck.GetPile(player)</c> 把 <c>CardPile</c> 引用存进自己的字段、之后只看那个引用；
+    /// 只重定向 getter 的话这份"旧引用"永远是回声自己的卡组（实测"p2 只显示 9 张初始卡"）。
     /// </remarks>
     private static readonly AccessTools.FieldRef<Player, CardPile> DeckField =
         AccessTools.FieldRefAccess<Player, CardPile>("<Deck>k__BackingField");
 
-    /// <summary>本局是否已经成组（锚点 + 至少一个回声）。</summary>
     /// <summary>
     /// 本局是否真的在"共用身体"：配对已武装（锚点 + ≥1 回声）**且这是联机局**。
     /// </summary>
     /// <remarks>
-    /// <para>
-    /// 这里就是全 mod 的总闸门：镜像（血量/格挡/上限/能力/金币）、球位、召唤物、归属归一、
-    /// 事件并发保护、牌堆顺序归一……都只看这一个属性，所以判定写在这里、只写一次。
-    /// </para>
-    /// <para>
-    /// <b>为什么必须带"联机"这一条</b>：配对是按设计"非共生体局不清空"的（避免读档/重连时误清），
-    /// 于是<b>单人局里它可能还留着上一局联机的配对</b>——那时 `IsActive` 为真会让各种补丁去动单人局的数据，
-    /// 最典型就是"草蜢偷牌把上一局的玩家 creature 塞进 targets → 本体 NRE 崩溃"（实测 2026-09-23 11:28）。
-    /// 带上联机判定后，单人局一律不介入。
-    /// </para>
+    /// 全 mod 的总闸门：镜像（血量/格挡/上限/能力/金币）、球位、召唤物、归属归一、事件并发保护、
+    /// 牌堆顺序归一……都只看这一个属性，所以判定写在这里、只写一次。
+    /// <b>为什么必须带"联机"这一条</b>：配对按设计"非共生体局不清空"（避免读档/重连时误清），
+    /// 于是单人局里可能还留着上一局联机的配对，`IsActive` 为真会让补丁去动单人局的数据 ——
+    /// 最典型是"草蜢偷牌把上一局的玩家 creature 塞进 targets → 本体 NRE 崩溃"（实测 2026-09-23 11:28）。
     /// </remarks>
     public static bool IsActive
     {
@@ -85,28 +71,6 @@ internal static class TogetherPair
             }
 
             return RunManager.Instance?.NetService is { } net && net.Type.IsMultiplayer();
-        }
-    }
-
-    /// <summary>
-    /// 更严的"本局有效"判定：在 <see cref="IsActive" /> 之上再要求成员都还在**本局**的 Players 里
-    /// （排除"上一局的 Player 对象"残留）。需要"塞进本局数据"的地方（如草蜢扩 targets）用它。
-    /// </summary>
-    public static bool IsLive
-    {
-        get
-        {
-            if (!IsActive)
-            {
-                return false;
-            }
-
-            if (Members().FirstOrDefault()?.RunState is not { } state)
-            {
-                return false;
-            }
-
-            return Members().All(member => state.Players.Contains(member));
         }
     }
 
@@ -124,24 +88,20 @@ internal static class TogetherPair
     /// <summary>
     /// 在<b>跑局构造完成之后</b>激活共生体。调用点在 <c>RunStartPatches</c> 的两个 Postfix 里。
     /// </summary>
-    /// <remarks>
-    /// <para>
-    /// <b>激活时机是这套设计里最容易踩的坑，必须保持"晚于 RunState 构造"。</b>
-    /// <c>RunState.CreateShared</c> 的顺序是"先设 p1 的 RunState，再遍历牌组给每张卡设 owner"：
-    /// </para>
-    /// <code>
-    /// foreach (Player player in players) {
-    ///     player.RunState = runState;                    // p1 先拿到 RunState
-    ///     foreach (CardModel card in player.Deck.Cards)  // ← 若此时已激活，p2.Deck 就是 p1 的卡组
-    ///         runState.AddCard(card, player);            // → 同一张牌被设两次 owner → 抛异常
-    /// }
-    /// </code>
-    /// <para>
-    /// 早期版本在 <c>Refresh(player.RunState)</c> 里懒激活，正好命中这一点，
-    /// 结果是 <c>InvalidOperationException: Card ... already has an owner</c> → 开局中断 → 黑屏。
-    /// 所以现在只在跑局工厂返回之后激活：那一刻所有人的 RunState 与卡组 owner 都已经落定。
-    /// </para>
-    /// </remarks>
+/// <remarks>
+/// <b>激活时机是这套设计里最容易踩的坑，必须保持"晚于 RunState 构造"。</b>
+/// <c>RunState.CreateShared</c> 的顺序是"先设 p1 的 RunState，再遍历牌组给每张卡设 owner"：
+/// <code>
+/// foreach (Player player in players) {
+///     player.RunState = runState;                    // p1 先拿到 RunState
+///     foreach (CardModel card in player.Deck.Cards)  // ← 若此时已激活，p2.Deck 就是 p1 的卡组
+///         runState.AddCard(card, player);            // → 同一张牌被设两次 owner → 抛异常
+/// }
+/// </code>
+/// 早期版本在 <c>Refresh(player.RunState)</c> 里懒激活，正好命中这一点，结果
+/// <c>InvalidOperationException: Card ... already has an owner</c> → 开局中断 → 黑屏。
+/// 所以只在跑局工厂返回之后激活：那一刻所有人的 RunState 与卡组 owner 都已落定。
+/// </remarks>
     public static void Arm(IRunState? runState, bool isNewRun = false)
     {
         if (runState is null || runState is NullRunState)
@@ -208,12 +168,10 @@ internal static class TogetherPair
         _armedRunState = runState;
         _anchorCombatState = null;
 
-        // 下面这两件事都是"开局一次性"的，**只能在新开一局时做**：
-        //
-        //  - 合并初始卡组：存档是按 player.Deck 序列化的，而回声的 Deck getter 早就重定向到共享卡组了，
-        //    所以存档里每个人的卡组都是同一份；读档后回声手里就有了一副"共享卡组的副本"，
-        //    这时再合并一次就是**翻倍**（实测重连一次 51 → 102）。读档/重连必须只用存档里的内容。
-        //  - 血量上限提升：上限已经写进存档，再抬一次会越滚越大。
+        // 下面两件事都是"开局一次性"，**只能在新开一局时做**（读档再跑一次就会翻倍）：
+        //  - 合并初始卡组：存档按 player.Deck 序列化，而回声的 Deck getter 早已重定向到共享卡组，
+        //    所以存档里每人卡组都是同一份；再合并一次 = **翻倍**（实测重连一次 51 → 102）。
+        //  - 血量上限提升：上限已写进存档，再抬一次会越滚越大。
         if (isNewRun)
         {
             if (TogetherSettingsSync.EffectiveMergeStarterDecks)
@@ -262,20 +220,11 @@ internal static class TogetherPair
         SameOwnerCheckCompat.Apply("run_armed");
     }
 
-    /// <summary>
-    /// 把 <paramref name="from" />（回声）的初始卡组并进 <paramref name="to" />（锚点）的卡组：
-    /// 共享卡组 = p1 + p2 + …。
-    /// </summary>
+    /// <summary>把回声的初始卡组并进锚点的卡组：共享卡组 = p1 + p2 + …。</summary>
     /// <remarks>
-    /// <para>
-    /// 逐张走"从原卡组摘掉 → 放进目标卡组 → 归属改成锚点"：牌还是那些牌，只是换了一副卡组，
-    /// 所以<b>不会留下无主的牌</b>。
-    /// </para>
-    /// <para>必须发生在"回声的 Deck 字段被换成锚点那份"<b>之前</b>，否则读到的就是同一副卡组了。</para>
-    /// <para>
-    /// 必须直接读 <c>Deck</c> 的<b>字段</b>：此时 <c>_anchor/_echoes</c> 已赋值，
-    /// 回声的 <c>Player.Deck</c> getter 会被重定向到锚点，用 getter 读会拿到目标那一副（合并会空转）。
-    /// </para>
+    /// 逐张走"从原卡组摘掉 → 放进目标卡组 → 归属改成锚点"：牌还是那些牌、只是换了一副卡组，不留无主牌。
+    /// 必须发生在"回声的 Deck 字段被换成锚点那份"<b>之前</b>，且必须直接读 <c>Deck</c> 的<b>字段</b>：
+    /// 此时 <c>_anchor/_echoes</c> 已赋值，回声的 getter 会被重定向到锚点，用 getter 读会拿到目标那副（合并空转）。
     /// </remarks>
     private static void MergeStarterDeckInto(Player from, Player to)
     {
@@ -301,12 +250,8 @@ internal static class TogetherPair
             + $"并入共享卡组（合计 {toDeck.Cards.Count} 张）");
     }
 
-    /// <summary>
-    /// 共生体血量上限提升：把每个回声最大生命的 <c>HpBonusPercent</c>% 加进共享血池。
-    /// </summary>
-    /// <remarks>
-    /// 上限和当前血一起抬（否则开局不是满血）。回声那边由 <see cref="BodyMirror" /> 对齐。
-    /// </remarks>
+    /// <summary>共生体血量上限提升：把每个回声最大生命的 <c>HpBonusPercent</c>% 加进共享血池。</summary>
+    /// <remarks>上限和当前血一起抬（否则开局不是满血）；回声那边由 <see cref="BodyMirror" /> 对齐。</remarks>
     private static void ApplyHpBonus(Player anchor, IReadOnlyList<Player> echoes)
     {
         var percent = TogetherSettingsSync.EffectiveHpBonusPercent;
@@ -376,12 +321,6 @@ internal static class TogetherPair
         return IsAnchor(player) || IsEcho(player);
     }
 
-    /// <summary>旧名字，等价于 <see cref="IsMember" />。</summary>
-    public static bool IsPaired(Player? player)
-    {
-        return IsMember(player);
-    }
-
     /// <summary>组内所有成员（锚点在前）。</summary>
     public static IEnumerable<Player> Members()
     {
@@ -410,10 +349,8 @@ internal static class TogetherPair
         return creature is null ? [] : OthersOf(creature.Player).Select(p => p.Creature);
     }
 
-    /// <summary>
-    /// 记录锚点当前的战斗状态。锚点重建 <see cref="PlayerCombatState" /> 时必须调用，
-    /// 否则回声会一直指向上一场战斗的牌堆。
-    /// </summary>
+    /// <summary>记录锚点当前的战斗状态；锚点重建 <see cref="PlayerCombatState" /> 时必须调用，
+    /// 否则回声会一直指向上一场战斗的牌堆。</summary>
     public static void SetAnchorCombatState(PlayerCombatState? state)
     {
         _anchorCombatState = state;
@@ -438,19 +375,13 @@ internal static class TogetherPair
     }
 }
 
-/// <summary>
-/// 「本局共生体成员名单」的同步：由 <b>Arm（配对完成）</b> 驱动，主机权威、sidecar 同步。
-/// </summary>
+/// <summary>「本局共生体成员名单」的同步：由 <b>Arm（配对完成）</b> 驱动，主机权威、sidecar 同步。</summary>
 /// <remarks>
-/// <para>
-/// 为什么不用 <c>SymbiosisMembers</c> 那份名单：它只在**选人界面**被写，进局后不重建、读档/重连时是空的
-/// （客户端还会在开始连接时清缓存）—— 生命周期和"本局配对"对不上，于是常常出现
-/// "本地=[1,1317…] 同步=[]"这种不一致（实测：草蜢偷牌的判据就是被它坑的）。
-/// </para>
-/// <para>
-/// 这里另开一个 topic，由 <see cref="TogetherPair.Arm" /> 在算出锚点+回声后发布一次：
-/// 读取路径（读档 / 重连 / 新房间）都会走 Arm，所以两端任何时刻拿到的都是同一份名单。
-/// </para>
+/// 不用 <c>SymbiosisMembers</c> 那份名单：它只在**选人界面**被写，进局后不重建、读档/重连时是空的
+/// （客户端还会在开始连接时清缓存），生命周期和"本局配对"对不上，常出现"本地=[1,1317…] 同步=[]"
+/// 这种不一致（草蜢偷牌的判据就是被它坑过）。
+/// 这里另开一个 topic，由 <see cref="TogetherPair.Arm" /> 在算出锚点+回声后发布一次：读取路径
+/// （读档/重连/新房间）都走 Arm，所以两端任何时刻拿到的是同一份。
 /// </remarks>
 internal static class RunMembersSync
 {

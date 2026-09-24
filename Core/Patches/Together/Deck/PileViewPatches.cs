@@ -12,9 +12,7 @@ using Together.Core.Combat;
 
 namespace Together.Core.Patches.Deck;
 
-/// <summary>
-/// 牌堆计数 UI 的即时同步：把按钮上的数字按<b>真实张数</b>写死，不再靠事件累加。
-/// </summary>
+/// <summary>牌堆计数 UI 的即时同步：把按钮上的数字按<b>真实张数</b>写死，不再靠事件累加。</summary>
 /// <remarks>
 /// 本体是"事件 + 每次 ±1"（<c>Math.Min(_currentCount + 1, _pile.Cards.Count)</c>），共享牌堆下有<b>两处必然漏事件</b>：
 /// ① 别人的牌不播动画（<c>GetTweenForCardsChangingPiles</c> 里非本地玩家的牌直接 continue）→ 回声那侧的计数基本不刷新；
@@ -36,10 +34,8 @@ internal static class PileCountSync
     /// <summary>已登记的 UI 节点 →（它盯着的牌堆，以及怎么刷新它）。</summary>
     private static readonly List<Entry> Entries = [];
 
-    /// <summary>
-    /// 字段缓存。键必须带<b>字段名</b>：同一类型上要读三个字段，只用类型当键会拿回上一个 <c>FieldInfo</c>
-    /// （实测报 <c>Object of type 'System.Int32' cannot be converted to type 'CardPile'</c>，整条刷新静默失效）。
-    /// </summary>
+    /// <summary>字段缓存。键必须带<b>字段名</b>：同一类型上要读三个字段，只用类型当键会拿回上一个 <c>FieldInfo</c>
+    /// （实测报 <c>Object of type 'System.Int32' cannot be converted to type 'CardPile'</c>，整条刷新静默失效）。</summary>
     private static readonly Dictionary<(Type Type, string Name), FieldInfo?> FieldCache = [];
 
     private static readonly Dictionary<(Type Type, string Name), MethodInfo?> MethodCache = [];
@@ -237,12 +233,7 @@ internal static class PileCountSync
         return method;
     }
 
-    /// <summary>
-    /// 只警告一次。
-    /// </summary>
-    /// <remarks>
-    /// 这些调用点都在"每张牌进出牌堆"的热路径上，出了问题会一瞬间刷上千行日志。
-    /// </remarks>
+    /// <summary>只警告一次（这些调用点都在"每张牌进出牌堆"的热路径上，出问题会一瞬间刷上千行日志）。</summary>
     private static void WarnOnce(string message)
     {
         if (_warned)
@@ -272,13 +263,9 @@ internal static class PileCountSyncOnChangePatch
     }
 }
 
-/// <summary>
-/// 登记两种"显示某口牌堆"的 UI：战斗牌堆按钮 + 顶栏卡组按钮（顺手对齐一次初始张数）。
-/// </summary>
-/// <remarks>
-/// 战斗牌堆按钮挂在含虚方法 <c>Initialize</c> 的基类上：<c>NExhaustPileButton</c> 的覆写会调用 <c>base.Initialize</c>，
-/// 所以三种按钮都会被登记到。
-/// </remarks>
+/// <summary>登记两种"显示某口牌堆"的 UI：战斗牌堆按钮 + 顶栏卡组按钮（顺手对齐一次初始张数）。</summary>
+/// <remarks>战斗牌堆按钮挂在含虚方法 <c>Initialize</c> 的基类上：<c>NExhaustPileButton</c> 的覆写会调用
+/// <c>base.Initialize</c>，所以三种按钮都会被登记到。</remarks>
 [HarmonyPatch]
 internal static class PileCountBindPatch
 {
@@ -330,9 +317,7 @@ internal static class PileCountUnbindPatch
     }
 }
 
-/// <summary>
-/// 让 <c>CardModel.Pile</c> 在配对局里也能找到"借住"在另一半堆里的自己。
-/// </summary>
+/// <summary>让 <c>CardModel.Pile</c> 在配对局里也能找到"借住"在另一半堆里的自己。</summary>
 /// <remarks>
 /// 本体是 <c>Pile =&gt; _owner?.Piles.FirstOrDefault(p =&gt; p.Cards.Contains(this))</c>，只在<b>卡牌自己 owner</b>
 /// 的堆集合里找自己。共享牌库打破了这条隐含约定：一张牌可能"借住"在另一半的共享堆里

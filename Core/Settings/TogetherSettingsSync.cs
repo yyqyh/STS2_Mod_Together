@@ -11,23 +11,15 @@ using Together;
 
 namespace Together.Core.Settings;
 
-/// <summary>
-/// 联机时的"共享角色"设置同步：<b>以主机为准</b>。
-/// </summary>
+/// <summary>联机时的"共享角色"设置同步：<b>以主机为准</b>。</summary>
 /// <remarks>
-/// <para>
 /// 为什么必须同步：配不配对是<b>每台机器各自算</b>的（<c>TogetherPair.Arm</c> 依据"本局有几名玩家选了那个角色"）。
 /// 要是两边设置不一样（主机选故障机器人、另一位还停在"关闭"），就会一台机器配对、另一台不配对 →
 /// 两台机器的牌堆/血量立刻分叉 → 校验和当场把人踢下线。所以设置只认主机的，客户端跟随。
-/// </para>
-/// <para>
 /// 机制照抄酒狐（<c>WineFoxRuntimeSettings</c> + <c>WineFoxMultiplayerSettingsSyncPatches</c>）：
 /// 用 RitsuLib 的 sidecar 配置同步发布/订阅一个 topic；主机在"开服 / 有对端就绪 / 改设置"时发布，
 /// 客户端缓存远端值并在连接开始时清掉旧缓存。判定"当前是不是客户端"用 <c>NetClientGameService</c>。
-/// </para>
-/// <para>
 /// 取不到远端值（单人局、还没连上、主机没发过）时一律用本地设置——单人局本来就该听自己的。
-/// </para>
 /// </remarks>
 internal static class TogetherSettingsSync
 {
@@ -39,13 +31,9 @@ internal static class TogetherSettingsSync
 
     private static Snapshot? _remote;
 
-    /// <summary>
-    /// 本局实际生效的"共生体开关"。
-    /// </summary>
-    /// <remarks>
-    /// 客户端优先用主机发布过来的值；其余情况用本地设置。<b>所有读设置的地方都应该走这里</b>，
-    /// 不要直接读 <see cref="TogetherSettingsStore" />。
-    /// </remarks>
+    /// <summary>本局实际生效的"共生体开关"。</summary>
+    /// <remarks>客户端优先用主机发布过来的值；其余情况用本地设置。<b>所有读设置的地方都应该走这里</b>，
+    /// 不要直接读 <see cref="TogetherSettingsStore" />。</remarks>
     public static bool EffectiveSymbiosisEnabled
     {
         get
@@ -64,9 +52,7 @@ internal static class TogetherSettingsSync
         }
     }
 
-    /// <summary>
-    /// 本局实际生效的"开局合并双方初始卡组"开关（同样是客户端跟随主机）。
-    /// </summary>
+    /// <summary>本局实际生效的"开局合并双方初始卡组"开关（同样是客户端跟随主机）。</summary>
     public static bool EffectiveMergeStarterDecks
     {
         get
@@ -85,9 +71,7 @@ internal static class TogetherSettingsSync
         }
     }
 
-    /// <summary>
-    /// 本局实际生效的"共生体血量上限提升百分比"（0~100，客户端跟随主机）。
-    /// </summary>
+    /// <summary>本局实际生效的"共生体血量上限提升百分比"（0~100，客户端跟随主机）。</summary>
     public static int EffectiveHpBonusPercent
     {
         get
@@ -106,9 +90,7 @@ internal static class TogetherSettingsSync
         }
     }
 
-    /// <summary>
-    /// 本局实际生效的"共生体人数上限"（2~4，客户端跟随主机）。
-    /// </summary>
+    /// <summary>本局实际生效的"共生体人数上限"（2~4，客户端跟随主机）。</summary>
     public static int EffectiveGroupSize
     {
         get

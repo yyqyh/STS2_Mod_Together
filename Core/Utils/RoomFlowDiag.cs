@@ -15,26 +15,15 @@ using MegaCrit.Sts2.Core.Runs;
 
 namespace Together.Core.Utils;
 
-/// <summary>
-/// 房间流程的"里程碑"日志（默认开着，每个点最多 30 条）。
-/// </summary>
+/// <summary>房间流程的"里程碑"日志（默认开着，每个点最多 30 条）。</summary>
 /// <remarks>
-/// <para>
 /// 黑屏这种"没有异常、只是卡住"的问题，log 里什么都没有的话没法定位。
-/// 这里把几个关键节点打出来，卡住时就能看出**最后一个成功打印的里程碑**：
-/// </para>
-/// <list type="number">
-/// <item><description><c>RunManager.EnterMapCoord</c>：玩家点了地图节点。</description></item>
-/// <item><description><c>RunManager.EnterMapPointInternal</c>：真正开始进房间（带房间类型）。</description></item>
-/// <item><description><c>NTransition.RoomFadeOut</c> / <c>RoomFadeIn</c>：转场淡出 / 淡入。
-/// <b>只有 FadeOut 没有 FadeIn = 卡在转场里（画面就是黑的）</b>。</description></item>
-/// <item><description><c>NRewardsScreen.RewardCollectedFrom</c>：奖励屏上取走一项。</description></item>
-/// <item><description><c>RunManager.ExitCurrentRoom</c>：开始退出当前房间。</description></item>
-/// </list>
-/// <para>
-/// 这些钩子都是<b>只看不改</b>的 Postfix/Prefix，不参与任何游戏逻辑；排查完可以整体删掉，
-/// 或者把 <see cref="CappedLog" /> 的 Limit 调小。
-/// </para>
+/// 这里把几个关键节点打出来，卡住时就能看出**最后一个成功打印的里程碑**：<c>RunManager.EnterMapCoord</c>
+/// （点了地图节点）、<c>RunManager.EnterMapPointInternal</c>（开始进房间）、<c>NTransition.RoomFadeOut</c> /
+/// <c>RoomFadeIn</c>（转场淡出/淡入，<b>只有 FadeOut 没有 FadeIn = 卡在转场里、画面就是黑的</b>）、
+/// <c>NRewardsScreen.RewardCollectedFrom</c>（取走奖励）、<c>RunManager.ExitCurrentRoom</c>（退出房间）。
+/// 这些钩子都是<b>只看不改</b>的 Postfix/Prefix，不参与任何游戏逻辑；排查完可整体删掉，
+/// 或把 <see cref="CappedLog" /> 的 Limit 调小。
 /// </remarks>
 [HarmonyPatch(typeof(NTransition), nameof(NTransition.RoomFadeOut))]
 internal static class RoomFadeOutDiagPatch
@@ -77,10 +66,8 @@ internal static class EnterMapPointDiagPatch
     }
 }
 
-/// <summary>
-/// 读档 / 重连 / ESC 重启房间都会走 <c>RunManager.Launch</c>，而这条路径<b>不经过地图节点</b>，
-/// 所以这里再补一次看门狗——黑屏恰恰多数发生在这条路径上。
-/// </summary>
+/// <summary>读档 / 重连 / ESC 重启房间都会走 <c>RunManager.Launch</c>，而这条路径<b>不经过地图节点</b>，
+/// 所以这里再补一次看门狗——黑屏恰恰多数发生在这条路径上。</summary>
 [HarmonyPatch(typeof(RunManager), nameof(RunManager.Launch))]
 internal static class RunLaunchWatchdogPatch
 {
@@ -111,9 +98,7 @@ internal static class RewardCollectedDiagPatch
     }
 }
 
-/// <summary>
-/// 后端（<c>RewardsSetSynchronizer</c>）把某个奖励集标记成"完成/跳过"。
-/// </summary>
+/// <summary>后端（<c>RewardsSetSynchronizer</c>）把某个奖励集标记成"完成/跳过"。</summary>
 /// <remarks>
 /// 这条是排查"黑屏"的关键：奖励屏上的按钮都点完了、但后端那套奖励集**没有被标记完成**时，
 /// 屏幕会一直等一个永远不来的完成信号（表现就是卡住/黑屏），本体只会打一句
@@ -130,31 +115,20 @@ internal static class CompleteRewardsSetDiagPatch
     }
 }
 
-/// <summary>
-/// 黑屏探针 + 自愈：每秒看一眼转场遮罩，卡在黑色上超过几秒就强制淡回画面。
-/// </summary>
+/// <summary>黑屏探针 + 自愈：每秒看一眼转场遮罩，卡在黑色上超过几秒就强制淡回画面。</summary>
 /// <remarks>
-/// <para>
-/// 黑屏有两种，处置方式完全不同：
-/// </para>
-/// <list type="bullet">
-/// <item><description><b>主循环死了</b>（日志停在某个里程碑不动）→ 死锁，看最后一个里程碑。</description></item>
-/// <item><description><b>主循环活着但画面全黑</b> → 转场遮罩（<c>NTransition</c>）停在了"全黑"那一帧上。
+/// 黑屏有两种，处置方式完全不同：<b>主循环死了</b>（日志停在某个里程碑不动）→ 死锁，看最后一个里程碑；
+/// <b>主循环活着但画面全黑</b> → 转场遮罩（<c>NTransition</c>）停在了"全黑"那一帧上。
 /// 本体只有 <c>RoomFadeIn</c> 会把它淡回透明，而 <c>ExitCurrentRoom</c> 一旦中途出错、
-/// 或者读档进入"战斗已打完、奖励未领"的房间，那次淡入就永远不会被调用。</description></item>
-/// </list>
-/// <para>
+/// 或者读档进入"战斗已打完、奖励未领"的房间，那次淡入就永远不会被调用。
 /// 这里每秒检查一次遮罩透明度。判定为"黑着"之后：
 /// 超过 <see cref="BlackScreenToleranceMs" /> 先跑一次本体的淡入（保底能把画面救回来），
 /// 再不行就直接把遮罩透明度硬置 0（<see cref="HardReset" />）。
 /// 日志只在"刚开始黑 / 强制救援 / 画面恢复"这几个节点打印，不刷屏。
-/// </para>
-/// <para>
 /// <b>看门狗的 Timer 挂在场景根节点上</b>，而读档、ESC 重启房间都会让 UI 树重建。
 /// 早期版本用一个 <c>static bool _running</c> 记"已经挂过了"，一旦那次重建把 Timer 带走，
 /// 它就<b>静默失效</b>——表现正是"大部分时候有效果、某一次之后就再也没反应了"。
 /// 现在每次都校验节点还在不在树上，不在就重挂。
-/// </para>
 /// </remarks>
 internal static class HangWatchdog
 {
@@ -302,9 +276,7 @@ internal static class HangWatchdog
         }
     }
 
-    /// <summary>
-    /// 读 <c>NTransition</c> 里两层遮罩的透明度（取较大的那个）。
-    /// </summary>
+    /// <summary>读 <c>NTransition</c> 里两层遮罩的透明度（取较大的那个）。</summary>
     /// <remarks>
     /// <c>_gradientTransition</c> 平时只是"停在屏幕外的不透明渐变条"，光看 alpha 会误判，
     /// 所以它额外要求位置已经扫进屏幕（<c>Position.Y</c> 接近 0）才算挡着画面。
@@ -354,9 +326,7 @@ internal static class HangWatchdog
         return field?.GetValue(transition) as Control;
     }
 
-    /// <summary>
-    /// 最后的兜底：不管本体的淡入链路为什么失败，直接把遮罩透明度按回 0、解除鼠标拦截。
-    /// </summary>
+    /// <summary>最后的兜底：不管本体的淡入链路为什么失败，直接把遮罩透明度按回 0、解除鼠标拦截。</summary>
     /// <remarks>
     /// 覆盖的是这种情况：<c>RoomFadeIn</c> 因为材质不是 ShaderMaterial 之类的分支提前 return，
     /// 结果 <c>InTransition</c> 已经是 false、但 <c>_simpleTransition</c> 的 alpha 还停在 1（全黑）。

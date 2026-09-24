@@ -11,30 +11,18 @@ using Together.Core.Settings;
 
 namespace Together.Core.Content;
 
-/// <summary>
-/// 共生体成员：在选人界面按了"确定为共生体"的玩家集合。
-/// </summary>
+/// <summary>共生体成员：在选人界面按了"确定为共生体"的玩家集合。</summary>
 /// <remarks>
-/// <para>
 /// <b>主机权威</b>：客户端只能发"我想确定/取消"的请求，由主机校验（只能确定自己 + 最多两个名额）后落库并广播。
 /// 用的是 RitsuLib 的 sidecar 配置同步（和设置开关同一套机制，WineFox 也在用）：
-/// </para>
-/// <list type="bullet">
-/// <item><description>主机：<c>RegisterTopic</c> 写入本地集合 → <c>PublishHostState</c> 广播。</description></item>
-/// <item><description>客户端：<c>TryRequestClientChange</c> 发请求 → 主机批准后广播 → 客户端在 <c>TopicChanged</c> 里更新缓存。</description></item>
-/// </list>
-/// <para>
+/// 主机 <c>RegisterTopic</c> 写本地集合 → <c>PublishHostState</c> 广播；客户端 <c>TryRequestClientChange</c> 发请求 →
+/// 主机批准后广播 → 客户端在 <c>TopicChanged</c> 里更新缓存。
 /// 这样"两个人确定后第三个人不能确定"在两端都是同一个判定，不会出现一边能按一边不能按的分叉。
-/// </para>
-/// <para>
 /// 单机（本地多控）时网络服务是 Host，走"主机"这条路：本地判定 + 广播，天然支持一台机器上轮流操作多个本地玩家。
-/// </para>
 /// </remarks>
 internal static class SymbiosisMembers
 {
-    /// <summary>
-    /// 名额：共生体最多几个人（设置里的"共生体人数上限"，2~4，联机以主机为准）。
-    /// </summary>
+    /// <summary>名额：共生体最多几个人（设置里的"共生体人数上限"，2~4，联机以主机为准）。</summary>
     public static int Capacity => TogetherSettingsSync.EffectiveGroupSize;
 
     private const string Topic = "together.symbiosis_members";
@@ -71,27 +59,19 @@ internal static class SymbiosisMembers
         RitsuLibSidecarConfigSyncService.TopicChanged += OnTopicChanged;
     }
 
-    /// <summary>
-    /// 把大厅的网络服务提前挂到 <see cref="RunManager" /> 上（只做主机侧）。
-    /// </summary>
+    /// <summary>把大厅的网络服务提前挂到 <see cref="RunManager" /> 上（只做主机侧）。</summary>
     /// <remarks>
-    /// <para>
     /// 共生体成员同步用的是 RitsuLib 的主机权威配置同步：客户端发请求，主机在
     /// <c>RitsuLibSidecarConfigSyncService.OnRequestMessage</c> 里校验并落库。
     /// 而那个方法第一句就是
     /// <c>var netService = RunManager.Instance?.NetService; if (netService is not NetHostGameService) return;</c>
-    /// </para>
-    /// <para>
     /// 问题在于：<b>选人界面阶段一局还没开始</b>，<c>RunManager</c> 要等
     /// <c>SetUpNewMultiplayer</c> 才会把 <c>lobby.NetService</c> 装进去，
     /// 所以此刻 <c>RunManager.Instance.NetService</c> 还是未初始化的值 →
     /// 主机把客户端的请求<b>静默丢掉</b>（一条日志都不留）。
     /// 实测表现就是"联机时非主机按右下角的「确定参加共生体」没有任何反应"。
-    /// </para>
-    /// <para>
     /// 大厅用的服务对象与进局时 <c>SetUpNewMultiplayer</c> 收到的 <c>lobby.NetService</c>
     /// <b>是同一个</b>，所以这里提前绑定不会造成两端分叉；进局时本体再赋一次同样的值。
-    /// </para>
     /// </remarks>
     public static void BindHostService(INetGameService? netService)
     {
@@ -120,9 +100,7 @@ internal static class SymbiosisMembers
         }
     }
 
-    /// <summary>
-    /// 客户端进入一间大厅时，把本地这一份重置成"空名单 + 修订号归 1"。
-    /// </summary>
+    /// <summary>客户端进入一间大厅时，把本地这一份重置成"空名单 + 修订号归 1"。</summary>
     /// <remarks>
     /// RitsuLib 的快照接收会丢掉"修订号不比自己新"的广播
     /// （<c>if (current.Revision &gt; ctx.Message.Revision) return;</c>）。
@@ -316,9 +294,7 @@ internal static class SymbiosisMembers
             ApplyDelta);
     }
 
-    /// <summary>
-    /// 主机的校验：只允许"确定自己"，且最多两个名额。
-    /// </summary>
+    /// <summary>主机的校验：只允许"确定自己"，且最多两个名额。</summary>
     /// <remarks>
     /// 这段在 RitsuLib 的主题锁里执行，所以只碰我们自己的 <see cref="Gate" />，
     /// 并且绝不在持有 <see cref="Gate" /> 时回调 RitsuLib（避免锁顺序反转）。

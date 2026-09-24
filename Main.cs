@@ -11,9 +11,7 @@ using Together.Core.Settings;
 
 namespace Together;
 
-    /// <summary>
-    /// Mod 入口。
-    /// </summary>
+    /// <summary>Mod 入口。</summary>
     /// <remarks>
     /// 这里只做三件事：建 logger、把本程序集交给 RitsuLib 做自动注册、装 Harmony 补丁。
     /// 内容（角色 / 卡 / 遗物 / 能力 / 设置页）靠 <c>[RegisterXxx]</c> 特性自动注册，
@@ -22,18 +20,14 @@ namespace Together;
     [ModInitializer(nameof(Initialize))]
     public static class Main
     {
-        /// <summary>
-        /// 必须与清单 id、DLL 名、PCK 名一致。
-        /// 这里直接取 <see cref="Const.ModId" />，避免两处各写一份字面量后漂移。
-        /// </summary>
+        /// <summary>必须与清单 id、DLL 名、PCK 名一致（直接取 <see cref="Const.ModId" />，
+        /// 避免两处各写一份字面量后漂移）。</summary>
         public const string ModId = Const.ModId;
 
         public static Logger Logger { get; private set; } = null!;
 
-        /// <summary>
-        /// 本 mod 的 Harmony 实例。后加的补丁（如扫描出来的第三方方法）也走它，
-        /// 保证所有改动都在同一个 id 下可追踪。
-        /// </summary>
+        /// <summary>本 mod 的 Harmony 实例。后加的补丁（如扫描出来的第三方方法）也走它，
+        /// 保证所有改动都在同一个 id 下可追踪。</summary>
         public static Harmony Patcher { get; private set; } = null!;
 
         public static void Initialize()
@@ -56,9 +50,7 @@ namespace Together;
             SameOwnerCheckCompat.Apply(Patcher, "init");
         }
 
-        /// <summary>
-        /// 逐个补丁类安装，失败只废掉那一个类。
-        /// </summary>
+        /// <summary>逐个补丁类安装，失败只废掉那一个类。</summary>
         /// <remarks>
         /// 不能用 <c>Harmony.PatchAll</c>：它遇到第一个失败就抛异常，
         /// 而 <c>Initialize</c> 抛异常会让**整个 mod 初始化失败**——
