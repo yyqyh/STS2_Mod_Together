@@ -6,6 +6,7 @@ using MegaCrit.Sts2.Core.Modding;
 using STS2RitsuLib.Interop;
 using STS2RitsuLib;
 using Together.Core.Content;
+using Together.Core.Patches.Deck;
 using Together.Core.Settings;
 
 namespace Together;
@@ -29,6 +30,12 @@ namespace Together;
 
         public static Logger Logger { get; private set; } = null!;
 
+        /// <summary>
+        /// 本 mod 的 Harmony 实例。后加的补丁（如扫描出来的第三方方法）也走它，
+        /// 保证所有改动都在同一个 id 下可追踪。
+        /// </summary>
+        public static Harmony Patcher { get; private set; } = null!;
+
         public static void Initialize()
         {
             var assembly = Assembly.GetExecutingAssembly();
@@ -43,6 +50,10 @@ namespace Together;
             SymbiosisMembers.Initialize();
 
             ApplyPatches(assembly);
+
+            // 通用兼容层：放行"任何自己重写了'同批 owner 必须一致'校验的 mod"。
+            // 判据是方法 IL 里有没有那条错误信息，不看 mod 名字 —— 见 SameOwnerCheckCompat。
+            SameOwnerCheckCompat.Apply(Patcher, "init");
         }
 
         /// <summary>
@@ -58,6 +69,7 @@ namespace Together;
         private static void ApplyPatches(Assembly assembly)
         {
             var harmony = new Harmony(ModId);
+            Patcher = harmony;
             var applied = 0;
             var failed = 0;
 

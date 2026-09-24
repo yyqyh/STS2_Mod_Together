@@ -22,6 +22,11 @@ namespace Together.Core.Combat;
 /// （2026-09-22 log：<c>Combat #2 turn loop died … NullReferenceException at CombatManager.StartTurn</c>，
 /// 抛在 <c>await item3.AfterTurnStart(...)</c> 这一行）。所以下面两条都自己还 Task。
 /// </para>
+/// <para>
+/// <b>单人局必须保持本体行为</b>：这两条规则是为了"共享格挡"才成立的（清格挡会把另一半攒的也清掉），
+/// 所以先用 <see cref="TogetherPair.IsActive" /> 把非配对局挡在外面 —— 否则单人局拿佩尔之眼时
+/// 额外回合不清格挡，那是偏离本体的。
+/// </para>
 /// </remarks>
 [HarmonyPatch(typeof(Creature), nameof(Creature.AfterTurnStart))]
 internal static class ExtraTurnSkipAfterTurnStartPatch
@@ -32,6 +37,11 @@ internal static class ExtraTurnSkipAfterTurnStartPatch
     {
         try
         {
+            if (!TogetherPair.IsActive)
+            {
+                return true;
+            }
+
             if (CombatManager.Instance?.PlayersTakingExtraTurn.Count is not > 0)
             {
                 return true;
@@ -58,6 +68,11 @@ internal static class ExtraTurnNoBlockClearPatch
     {
         try
         {
+            if (!TogetherPair.IsActive)
+            {
+                return true;
+            }
+
             // 额外回合：一律不清（共享格挡两个人都在用）。
             if (CombatManager.Instance?.PlayersTakingExtraTurn.Count is > 0)
             {

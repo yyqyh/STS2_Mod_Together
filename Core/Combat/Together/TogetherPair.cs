@@ -256,6 +256,10 @@ internal static class TogetherPair
             $"[together] 共生体已激活：anchor={Describe(picked[0])} "
             + $"echoes=[{string.Join(",", _echoes.Select(Describe))}]"
             + $"（大厅共 {players.Count} 人，共享卡组 {picked[0].Deck.Cards.Count} 张）");
+
+        // 兼容层补扫：有些 mod 的程序集可能晚于 mod 初始化才被加载，
+        // 进局时再扫一遍（已扫过的程序集直接跳过，成本只有几十个字符串比较）。
+        SameOwnerCheckCompat.Apply("run_armed");
     }
 
     /// <summary>

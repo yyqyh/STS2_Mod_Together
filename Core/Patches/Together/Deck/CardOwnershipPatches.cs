@@ -1,6 +1,5 @@
 using System.Reflection.Emit;
 using System.Reflection;
-using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
 
 using HarmonyLib;
@@ -25,26 +24,29 @@ namespace Together.Core.Patches.Deck;
 /// </summary>
 /// <remarks>
 /// <para>
-/// 规则一句话：<b>在手牌里属于手牌主人，离开手牌后归还锚点。</b>
+/// 规则一句话：<b>牌归"它当前所在手牌"的主人；不在手牌里的牌保留自然归属，不再改写。</b>
 /// </para>
 /// <para>
-/// 为什么必须成对：
+/// 为什么<b>不能</b>把共享堆（抽牌堆/弃牌堆/消耗堆）里的牌统一改成锚点：本体有二十多处逻辑是拿
+/// <c>card.Owner</c> 认领"这张牌是不是我的"——<c>JossPaper</c>（金纸）、<c>CharonsAshes</c>（卡戎之灰）、
+/// <c>ForgottenSoul</c>、<c>BurningSticks</c>、<c>Tingsha</c>、<c>ToughBandages</c>、
+/// <c>BansheesCry</c>、<c>PanachePower</c>、<c>GravityPower</c>、<c>JugglingPower</c>、<c>HexPower</c>……
+/// 一旦归一，这些"我的牌"判据会统统算到锚点头上：回声的遗物/能力永远不计数、锚点的会多计数。
 /// </para>
-/// <list type="number">
-/// <item><description>
-/// 进手牌要改成手牌主人，否则 <c>CardModel.Pile</c>（只在该卡 owner 的堆里找自己）会算出 null，
-/// 而且打出去时扣的是另一个人的能量。
-/// </description></item>
-/// <item><description>
-/// 离开手牌要还回锚点，否则共享的弃牌堆／抽牌堆里会出现**混合归属**的牌，
-/// 而本体的批量 <c>CardPileCmd.Add</c> 有一条硬校验："同一次调用里所有牌 owner 必须一致"。
-/// 洗牌正好走的是批量 Add（把弃牌堆混进抽牌堆），于是抛
-/// <c>Tried to add cards with different owners to the same pile!</c>，
-/// 直接把回合循环打死（实测"战斗中无法正确结束回合"就是这个）。
-/// </description></item>
-/// </list>
 /// <para>
-/// 翻牌用的 API 是本体自己留的那条路（"有主不可改"的唯一例外）：
+/// 当初要归一的唯一硬理由，是本体批量 <c>CardPileCmd.Add</c> 里那条"同一次调用里所有牌 owner 必须一致"的校验
+/// （洗牌就是"弃牌堆 + 抽牌堆"一次批量 Add，否则抛
+/// <c>Tried to add cards with different owners to the same pile!</c>）。那条校验的前提是
+/// "每个玩家的牌堆各自独立"，在共享牌库下根本不成立——所以正解是让<b>那条校验失效</b>
+/// （见 <see cref="DifferentOwnersCheckPatch" />），而不是反过来改牌的归属去迎合它。
+/// </para>
+/// <para>
+/// 仍然必须保留的一条是"<b>进手牌就归手牌主人</b>"（见 <see cref="HandOwnershipInvariantPatch" /> 与
+/// <see cref="CardOwnershipImpl.NormalizeForHand" />）：本体的手牌类效果大量用 <c>card.Owner</c> 反推
+/// "这是谁的手牌 / 该谁抽牌"，手牌里混进别人的牌会直接错位。
+/// </para>
+/// <para>
+/// 改归属用的 API 是本体自己留的那条路（"有主不可改"的唯一例外）：
 /// <c>CardModel.GiveToAnotherPlayer</c>，也就是本体 <c>CardPileCmd.GiveToAnotherPlayer</c> 用的同一套。
 /// </para>
 /// </remarks>
@@ -132,129 +134,23 @@ internal static class CardOwnerSinglePatch
 }
 
 /// <summary>
-/// 记住每张牌"最后一次躺在谁的手牌里"。
+/// 打掉批量 <c>CardPileCmd.Add</c> 里那条"同批 owner 必须一致"的校验，让共享牌堆里的牌保持<b>自然归属</b>。
 /// </summary>
 /// <remarks>
 /// <para>
-/// 共生体下共享牌堆里的牌必须<b>统一归锚点</b>：本体的 <c>CardModel.Pile</c> 是用
-/// <c>_owner.Piles</c> 反查自己所在的堆的，牌要是带着别人的归属躺在锚点的堆里，
-/// 迟早会有一处反查不到（更别说洗牌那条"同一堆的牌 owner 必须一致"的校验）。
-/// </para>
-/// <para>
-/// 但"归锚点"会丢掉一个信息：<b>这张牌原本是谁的</b>。而本体不少遗物/能力恰恰是靠
-/// <c>card.Owner == 自己</c> 来认领"我的牌"的 —— 例如金纸（<c>JossPaper</c>）：
-/// <c>AfterCardExhausted</c> 里 <c>if (card.Owner == base.Owner)</c> 才累计消耗数。
-/// 于是 P2 消耗自己的手牌时，牌已经被归一成锚点，P2 的金纸永远不计数。
-/// </para>
-/// <para>所以这里把"最后的手牌主人"单独记一份，供下面的补丁在派发钩子时临时还原。</para>
-/// </remarks>
-internal static class CardLastHandOwner
-{
-    private static readonly ConditionalWeakTable<CardModel, Player> LastHand = new();
-
-    public static void Remember(CardModel card, Player owner)
-    {
-        lock (LastHand)
-        {
-            LastHand.Remove(card);
-            LastHand.Add(card, owner);
-        }
-    }
-
-    public static bool TryGet(CardModel card, out Player? owner)
-    {
-        return LastHand.TryGetValue(card, out owner);
-    }
-}
-
-/// <summary>
-/// <c>AfterCardExhausted</c> 派发期间，把卡牌的归属临时还原成"最后持有它的玩家"。
-/// </summary>
-/// <remarks>
-/// <para>
-/// 牌进消耗堆时已经按共享牌堆的规则归一成锚点了，而归属于谁正是金纸这类遗物的判据。
-/// 派发钩子前临时改回、钩子跑完（含其中的 await）再改回来，既让遗物认得出"这是我的牌"，
-/// 又不破坏共享牌堆那条"堆里的牌归属一致"的不变量。
-/// </para>
-/// <para>
-/// 因为 <c>Hook.AfterCardExhausted</c> 是 async 方法，Prefix/Postfix 都跑在同步段里，
-/// 所以恢复动作要把返回的 <c>Task</c> 包一层，等它真正结束再执行。
-/// </para>
-/// </remarks>
-[HarmonyPatch(typeof(Hook), nameof(Hook.AfterCardExhausted))]
-internal static class ExhaustedOwnerForHooksPatch
-{
-    /// <summary>参数位置：combatState=0, choiceContext=1, <b>card=2</b>, causedByEthereal=3。</summary>
-    [HarmonyPrefix]
-    private static void Prefix(CardModel __2, ref Player? __state)
-    {
-        __state = null;
-
-        if (!TogetherPair.IsActive || __2 is null)
-        {
-            return;
-        }
-
-        if (!CardLastHandOwner.TryGet(__2, out var lastOwner) || lastOwner is null)
-        {
-            return;
-        }
-
-        if (ReferenceEquals(__2.Owner, lastOwner))
-        {
-            return;
-        }
-
-        __state = __2.Owner;
-        __2.GiveToAnotherPlayer(lastOwner);
-
-        CappedLog.Info(
-            "owner.restore",
-            $"消耗结算：把 {__2.Id.Entry} 的归属临时还给 netId={lastOwner.NetId}"
-            + $"（结算前已按共享牌堆归一为 netId={__state?.NetId}）");
-    }
-
-    [HarmonyPostfix]
-    private static void Postfix(CardModel __2, Player? __state, ref Task __result)
-    {
-        if (__state is null || __result is null || __2 is null)
-        {
-            return;
-        }
-
-        __result = RestoreAfterAsync(__result, __2, __state);
-    }
-
-    private static async Task RestoreAfterAsync(Task task, CardModel card, Player original)
-    {
-        try
-        {
-            await task;
-        }
-        finally
-        {
-            card.GiveToAnotherPlayer(original);
-        }
-    }
-}
-
-/// <summary>
-/// 方法 1（重做版）：打掉批量 <c>CardPileCmd.Add</c> 里那条"同批 owner 必须一致"的校验，
-/// 让共享牌堆里的牌保持<b>自然归属</b>。
-/// </summary>
-/// <remarks>
-/// <para>
-/// 为什么必须这么做：那条校验的前提是"每个玩家的牌堆各自独立"。共享牌库下共享的弃牌堆／抽牌堆
+/// <b>配对局里这条是必须装上的</b>。那条校验的前提是"每个玩家的牌堆各自独立"：共享牌库下，
+/// 共享的弃牌堆／抽牌堆
 /// 本来就该同时装着两个人的牌，而<b>洗牌</b>正是"把弃牌堆混进抽牌堆"的批量 Add ——
 /// 一旦抛 <c>…different owners…</c>，<b>回合循环直接终止、战斗卡住</b>。
 /// </para>
 /// <para>
-/// 之前的临时办法是"把共享堆里牌的 owner 统一改成锚点"去迎合这条校验，但它连带出两个问题：
+/// 曾经的临时办法是"把共享堆里牌的 owner 统一改成锚点"去迎合这条校验，效果是连带出两个问题：
 /// <list type="bullet">
-/// <item><description><b>幽灵卡</b>：<c>CardModel.Pile</c> 按 owner 反查堆，owner 改了之后反查失效。</description></item>
+/// <item><description><b>幽灵卡</b>：<c>CardModel.Pile</c> 按 owner 反查堆，owner 被改写之后反查失效。</description></item>
 /// <item><description><b>变牌失败</b>：<c>CardCmd.Transform</c> 要求替换卡与原卡 owner 一致，owner 不再唯一对应"牌属于谁"就撞上。</description></item>
+/// <item><description><b>"我的牌"判据集体失效</b>：金纸/卡戎之灰/探戈/绷带……全按 <c>card.Owner</c> 认领，归一后统统算到锚点头上。</description></item>
 /// </list>
-/// 所以正确解法是让这条校验失效，owner 保持自然归属。
+/// 所以归一路线已经撤掉，这里让这条校验失效即为其正解。
 /// </para>
 /// <para>
 /// <b>关键点（上一版失败的原因）</b>：<c>Add</c> 是 <c>async</c> 方法，Harmony 的 transpiler
@@ -366,170 +262,6 @@ internal static class DifferentOwnersCheckPatch
 }
 
 /// <summary>
-/// "弃掉整手牌、再抽同样数量"（计算下注 / 赌徒之酿 / 赌徒筹码）的抽牌对象修正。
-/// </summary>
-/// <remarks>
-/// <para>
-/// 本体 <c>CardCmd.DiscardAndDraw</c> 的顺序是：<b>先把每张牌塞进弃牌堆，然后用
-/// <c>discardCards[0].Owner</c> 决定谁来抽牌</b>。
-/// </para>
-/// <para>
-/// 而共享弃牌堆里的牌在我们这边会被统一归到锚点名下（见 <see cref="SharedPileOwnerLateNormalizePatch" />），
-/// 所以等轮到抽牌时那个 owner 已经变成锚点了 ——
-/// 回声打计算下注就变成"弃掉自己的手牌、由锚点抽牌"：p2 这边看着一张都没抽到（抽到的牌随后在回合结束被清手牌丢掉了），
-/// 锚点那边反而白赚一手。锚点自己打则恰好是对的，所以之前只看到 p2 有问题。
-/// </para>
-/// <para>
-/// 修法不动本体的归属规则：进入这个方法时先记下"这批牌原本在谁的手里"，
-/// 等紧接着那次 <c>CardPileCmd.Draw</c> 真的在为另一半抽牌时，把抽牌者改回手牌主人。
-/// 只认"最近一次"且限定在同一小段窗口内，其它抽牌不受影响。
-/// </para>
-/// </remarks>
-internal static class DiscardDrawTarget
-{
-    private const long WindowMs = 5000;
-
-    private static Player? _intended;
-
-    private static int _intendedCount;
-
-    private static long _ticks;
-
-    /// <summary>记下"这批要弃掉的牌原本在谁的手里"。</summary>
-    public static void Remember(IEnumerable<CardModel>? cards)
-    {
-        _intended = null;
-
-        if (!TogetherPair.IsActive || cards is null)
-        {
-            return;
-        }
-
-        var first = cards as IReadOnlyList<CardModel> is { Count: > 0 } list
-            ? list[0]
-            : cards.FirstOrDefault();
-
-        if (first is null)
-        {
-            return;
-        }
-
-        if (PileOf(first) is not { Type: PileType.Hand } hand)
-        {
-            return;
-        }
-
-        if (TogetherPair.Anchor?.RunState is not { } runState)
-        {
-            return;
-        }
-
-        if (CardOwnershipImpl.HandOwnerOf(runState, hand) is not { } owner)
-        {
-            return;
-        }
-
-        _intended = owner;
-        _intendedCount = cards.Count();
-        _ticks = Environment.TickCount64;
-    }
-
-    /// <summary>把"在为另一半抽牌"纠正回手牌主人。</summary>
-    /// <param name="drawCount">这次要抽几张。</param>
-    /// <remarks>
-    /// 必须连<b>抽牌张数</b>一起对：如果那次"弃牌再抽"实际没抽（比如手里是空的 → 张数 0），
-    /// 记录就会一直挂到超时，这时别的成员刚好回合开始抽 5 张就会被误改道
-    /// （实测 "p2 抽 10、p1 抽 0" 就是这么来的）。
-    /// </remarks>
-    public static bool TryRedirect(ref Player player, int drawCount)
-    {
-        var intended = _intended;
-        if (intended is null || Environment.TickCount64 - _ticks > WindowMs)
-        {
-            return false;
-        }
-
-        if (drawCount != _intendedCount)
-        {
-            return false;
-        }
-
-        if (ReferenceEquals(intended, player))
-        {
-            // 本来就是对的（锚点自己打）：消费掉记录，不做改动。
-            _intended = null;
-            return false;
-        }
-
-        // 只有"这次抽牌本来按组里另一位成员算、但实际该给手牌主人"才改写。
-        if (ReferenceEquals(player, intended)
-            || !TogetherPair.IsMember(player)
-            || !TogetherPair.IsMember(intended))
-        {
-            return false;
-        }
-
-        _intended = null;
-        player = intended;
-        return true;
-    }
-
-    private static CardPile? PileOf(CardModel card)
-    {
-        try
-        {
-            return card.Pile;
-        }
-        catch (Exception)
-        {
-            return null;
-        }
-    }
-}
-
-/// <summary>进 <c>DiscardAndDraw</c> 时记下"这批牌在谁手里"。</summary>
-[HarmonyPatch(typeof(CardCmd), nameof(CardCmd.DiscardAndDraw))]
-internal static class DiscardAndDrawRememberPatch
-{
-    [HarmonyPrefix]
-    private static void Prefix(IEnumerable<CardModel> __1)
-    {
-        try
-        {
-            DiscardDrawTarget.Remember(__1);
-        }
-        catch (Exception ex)
-        {
-            Main.Logger.Warn($"[together] 记录弃牌抽牌对象失败：{ex.Message}");
-        }
-    }
-}
-
-/// <summary>那次抽牌如果真的落到了另一半头上，就纠正回手牌主人。</summary>
-[HarmonyPatch(
-    typeof(CardPileCmd),
-    nameof(CardPileCmd.Draw),
-    new[] { typeof(PlayerChoiceContext), typeof(decimal), typeof(Player), typeof(bool) })]
-internal static class DrawRedirectToHandOwnerPatch
-{
-    [HarmonyPrefix]
-    private static void Prefix(ref Player __2, decimal __1)
-    {
-        try
-        {
-            if (DiscardDrawTarget.TryRedirect(ref __2, (int)__1))
-            {
-                CappedLog.Info("draw.redirect", $"抽牌对象修正回手牌主人：netId={__2.NetId}");
-            }
-        }
-        catch (Exception ex)
-        {
-            Main.Logger.Warn($"[together] 抽牌对象修正失败：{ex.Message}");
-        }
-    }
-}
-
-/// <summary>
 /// 手牌归属不变量：<b>在谁手里就归谁</b>。
 /// </summary>
 /// <remarks>
@@ -548,7 +280,12 @@ internal static class DrawRedirectToHandOwnerPatch
 /// 修法是在牌<b>进手牌</b>的那一刻（<c>CardPile.AddInternal</c>）就把 owner 对齐到该手牌的主人。
 /// 这里是原地改 owner、<b>不</b>像 <see cref="CardOwnershipImpl.NormalizeForHand" /> 那样先摘牌：
 /// 牌已经躺在这口手牌里了，新主人的堆集合里就有这口堆，<c>card.Pile</c> 依然找得到它，
-/// 不会出现"牌同时挂在两处"。离手时的归属仍由 <see cref="SharedPileOwnerLateNormalizePatch" /> 处理。
+/// 不会出现"牌同时挂在两处"。
+/// </para>
+/// <para>
+/// 这是<b>唯一</b>还在改写 owner 的地方：离手之后一律保留自然归属（"这张牌是谁的"）。
+/// 共享堆因此会同时装着两个人的牌，批量 <c>CardPileCmd.Add</c> 的那条同 owner 校验由
+/// <see cref="DifferentOwnersCheckPatch" /> 打掉。
 /// </para>
 /// </remarks>
 [HarmonyPatch(typeof(CardPile), nameof(CardPile.AddInternal))]
@@ -567,10 +304,6 @@ internal static class HandOwnershipInvariantPatch
         {
             return;
         }
-
-        // 记下"这张牌最后躺在谁的手牌里"：牌离手后会被归一成锚点归属，而遗物/能力
-        // 认领"我的牌"时看的正是 card.Owner（例如金纸 JossPaper）。见 CardLastHandOwner。
-        CardLastHandOwner.Remember(__0, handOwner);
 
         if (ReferenceEquals(__0.Owner, handOwner))
         {
@@ -597,11 +330,10 @@ internal static class HandOwnershipInvariantPatch
 /// 原因：这类效果的目标手牌是本体<b>用卡牌自己的 owner 推出来的</b> ——
 /// CardPileCmd.Add(cards, PileType.Hand, …) 内部走的是
 /// <c>PileType.Hand.GetPile(cards.First().Owner)</c>。
-/// 而共享堆（抽牌堆/弃牌堆/消耗堆）里的牌在我们的设计里统一归<b>锚点</b>
-/// （见 SharedPileOwnerLateNormalizePatch，那是为了洗牌那条"同批 owner 必须一致"的校验）。
-/// 于是回声打这类牌时，<c>cards.First().Owner</c> 是锚点 → 目标被推成<b>锚点的手牌</b>：
-/// 牌从回声的屏幕上消失，却跑进锚点手里去了。
-/// （反过来若进了自己的手但 owner 仍是锚点，界面又会因为 LocalContext.IsMe(card.Owner)
+/// 而共享牌堆里的牌保留的是<b>自然归属</b>，它不等于"此刻正在操作这批牌的人"：
+/// 回声打这类牌时，<c>cards.First().Owner</c> 可能是锚点（或别的成员）→ 目标被推成<b>别人的手牌</b>：
+/// 牌从回声的屏幕上消失，却跑进另一个人手里去了。
+/// （反过来若进了自己的手但 owner 不是自己，界面又会因为 LocalContext.IsMe(card.Owner)
 /// 不为真而不给这张牌建手牌节点 —— 同样是"看不见"。）
 /// </para>
 /// <para>
@@ -918,92 +650,5 @@ internal static class HandReturnBatchPilePatch
                 return;
             }
         }
-    }
-}
-
-/// <summary>
-/// 归属改写的**正确时机**：牌彻底离开手牌、且搬运动画已经播完之后，再把共享堆里的牌统一归锚点。
-/// </summary>
-/// <remarks>
-/// <para>
-/// 为什么必须"晚"：本体 <c>CardPileCmd.Add</c> 内部的顺序是
-/// <c>①从原堆摘除 → ②插入目标堆 → ③播搬运动画（内含移除手牌节点）→ ④派发 AfterCardChangedPiles</c>。
-/// 我们原来在 ② 就改 owner（挂在 <c>CardPile.AddInternal</c> 上），而界面在 ③ 才做移除手牌节点的工作，
-/// 且它处处依赖 <c>card.Owner</c> / <c>card.Pile</c>：
-/// </para>
-/// <list type="bullet">
-/// <item><description><c>NPlayerHand</c> 里 <c>PileType.Hand.GetPile(card.Owner).Cards</c> —— 按下标摆放手牌。</description></item>
-/// <item><description><c>CardPileCmd.MoveCardNodeToNewPileBeforeTween</c> 里 <c>hand.IsAncestorOf(cardNode)</c> 的判断。</description></item>
-/// </list>
-/// <para>
-/// owner 与实际所在手牌对不上 → 界面漏掉这张牌 → 节点残留成"幽灵卡"（点它还能操作真实卡，
-/// 因为它持有的 <c>CardModel</c> 是真的，只是 owner 已被改成锚点）。
-/// </para>
-/// <para>
-/// 改到 <b>④ 之后</b>（本补丁的挂点）：动画已播完、节点已搬完，owner 再变就不影响界面；
-/// 而共享堆在本轮结束时仍然均匀归锚点，洗牌那条"同批 owner 必须一致"的校验照样能过。
-/// </para>
-/// <para>
-/// 判断条件是**目的堆类型**（Draw / Discard / Exhaust），与来源无关 ——
-/// 因为"打出的牌"走的是 Hand → Play → Discard，若只筛"从手牌直接离开"就会漏掉它，
-/// 那些牌会保持回声归属，洗牌时再次撞校验。
-/// </para>
-/// <para>
-/// 但<b>光看堆类型不够</b>：3~4 人局里没选共享角色的玩家也有自己的 Draw / Discard / Exhaust，
-/// 那些堆<b>不是</b>共享堆，别人的牌落进去不该被改写归属（改了会让 <c>card.Pile</c>
-/// 按 owner 反查不到自己的堆 → 那个人的整个牌库也跟着乱）。所以还要确认
-/// "这一堆就是锚点那一份"（回声的 getter 重定向后拿到的是同一实例，所以回声的牌也会被正确归一）。
-/// </para>
-/// <para>
-/// 只有自检/诊断不需要它；这里是正常功能，不做开关。
-/// </para>
-/// </remarks>
-[HarmonyPatch(typeof(Hook), nameof(Hook.AfterCardChangedPiles))]
-internal static class SharedPileOwnerLateNormalizePatch
-{
-    /// <summary>位置参数：runState=0, combatState=1, <b>card=2</b>, oldPileType=3, clonedBy=4。</summary>
-    [HarmonyPrefix]
-    private static void Prefix(CardModel __2)
-    {
-        if (!TogetherPair.IsActive || TogetherPair.Anchor is not { } anchor)
-        {
-            return;
-        }
-
-        // 已经搬完、动画也播完了：此刻读它的当前堆是稳定的。
-        var pile = __2.Pile;
-        if (pile is null)
-        {
-            return;
-        }
-
-        if (pile.Type is not (PileType.Draw or PileType.Discard or PileType.Exhaust))
-        {
-            return;
-        }
-
-        // 只处理共享堆（= 锚点的那一份）。非配对玩家自己的堆原样不动。
-        if (!IsSharedPile(pile))
-        {
-            return;
-        }
-
-        if (!ReferenceEquals(__2.Owner, anchor))
-        {
-            __2.GiveToAnotherPlayer(anchor);
-        }
-    }
-
-    /// <summary>这一堆是不是共享堆（锚点的 Draw / Discard / Exhaust）。</summary>
-    private static bool IsSharedPile(CardPile pile)
-    {
-        if (TogetherPair.Anchor?.PlayerCombatState is not { } anchorState)
-        {
-            return false;
-        }
-
-        return ReferenceEquals(pile, anchorState.DrawPile)
-               || ReferenceEquals(pile, anchorState.DiscardPile)
-               || ReferenceEquals(pile, anchorState.ExhaustPile);
     }
 }

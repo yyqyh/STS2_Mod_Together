@@ -335,10 +335,11 @@ internal static class PileCountUnbindPatch
 /// </summary>
 /// <remarks>
 /// 本体是 <c>Pile =&gt; _owner?.Piles.FirstOrDefault(p =&gt; p.Cards.Contains(this))</c>，只在<b>卡牌自己 owner</b>
-/// 的堆集合里找自己。共享牌库打破了这条隐含约定：为了过本体批量 <c>CardPileCmd.Add</c> 的"同批 owner 必须一致"
-/// 校验（洗牌走这条路，否则回合循环会死），离开手牌的牌被统一归到锚点名下 → 依赖 owner 反查堆的代码
-/// （<c>RemoveFromCurrentPile</c>、<c>NPlayerHand.GetHandInsertIndex</c> 等）会认错堆，表现就是
-/// "幽灵卡牌 / 牌同时留在两处 / 计数不刷新"。这里只做一件事：原查找失败时再去另一半的堆里找一遍。
+/// 的堆集合里找自己。共享牌库打破了这条隐含约定：一张牌可能"借住"在另一半的共享堆里
+/// （牌的 owner 是它自己的自然归属，而它此刻躺在锚点的弃牌堆里），依赖 owner 反查堆的代码
+/// （<c>RemoveFromCurrentPile</c>、<c>NPlayerHand.GetHandInsertIndex</c> 等）就可能认错堆，表现就是
+/// "幽灵卡牌 / 牌同时留在两处 / 计数不刷新"。
+/// 这里只做一件事：原查找失败时再去另一半的堆里找一遍（正常路径下不会触发，是张安全网）。
 /// </remarks>
 [HarmonyPatch(typeof(CardModel), "get_Pile")]
 internal static class CardPileLookupPatch
