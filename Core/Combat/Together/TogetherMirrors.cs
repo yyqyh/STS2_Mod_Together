@@ -320,6 +320,12 @@ internal static class PowerMirror
     /// </summary>
     private static readonly Dictionary<Type, PowerMirrorPolicy> Overrides = [];
 
+    /// <summary>注册一条逐能力覆写（对外接口用；见 <c>TogetherApi.RegisterPowerMirrorOverride</c>）。</summary>
+    internal static void RegisterOverride(Type powerType, PowerMirrorPolicy policy)
+    {
+        Overrides[powerType] = policy;
+    }
+
     private static int _mirrorDepth;
 
     /// <summary>
