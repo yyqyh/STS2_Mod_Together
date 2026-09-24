@@ -5,7 +5,9 @@ using MegaCrit.Sts2.Core.Entities.Players;
 using MegaCrit.Sts2.Core.Logging;
 using MegaCrit.Sts2.Core.Multiplayer;
 using MegaCrit.Sts2.Core.Multiplayer.Game;
+using MegaCrit.Sts2.Core.Models;
 using MegaCrit.Sts2.Core.Runs;
+using Together.Core.Api;
 using Together.Core.Content;
 using Together.Core.Patches.Deck;
 using Together.Core.Settings;
@@ -21,7 +23,7 @@ namespace Together.Core.Combat;
 /// <remarks>
 /// <b>锚点（<see cref="Anchor" />）</b>是权威实例持有者——主卡组与四个战斗牌堆都挂在它身上；
 /// <b>回声（<see cref="Echoes" />）</b>是组里其他人，访问入口被重定向到锚点，但手牌与能量保持独立。
-/// 人数由设置里的"共生体人数上限"决定（2~4），实际人数 = 选人界面按了「共生体」的人数（≥2 即成组）。
+/// 人数 = 选人界面按了「加入合作模式」的人数（≥2 即成组，没有名额限制，最多 <see cref="MaxMembers" /> 人）。
 /// <b>不用 <c>LocalContext</c> 之类的本机视角来决定锚点</b>：两端必须算出同一个答案，否则第一次抽牌就分叉；
 /// <c>RunState.Players</c> 的顺序来自大厅，两端天然一致，也会写进存档。
 /// </remarks>
@@ -37,6 +39,18 @@ internal static class TogetherPair
     private static Player? _anchor;
     private static readonly List<Player> _echoes = [];
     private static PlayerCombatState? _anchorCombatState;
+
+    /// <summary>本局是否已被外部 mod"解绑"（解绑后读档 / 重连都不再自动重新配对，新开一局复位）。</summary>
+    private static bool _duelUnbound;
+
+    /// <summary>
+    /// 激活配对之前，每个回声自己的主卡组实例。
+    /// </summary>
+    /// <remarks>
+    /// 解绑时要把回声的 <c>Deck</c> backing field 换回它自己那一份，否则回声会继续读到锚点的共享卡组、
+    /// 分牌等于白做。必须在"把回声的 Deck 换成锚点那份"<b>之前</b>抓。
+    /// </remarks>
+    private static readonly Dictionary<Player, CardPile> OriginalDecks = [];
 
     /// <summary><c>Player.Piles</c> 是首次访问即固化的缓存数组，需要在激活时清一次。</summary>
     private static readonly AccessTools.FieldRef<Player, CardPile[]?> RunPileCache =
@@ -107,6 +121,20 @@ internal static class TogetherPair
             return;
         }
 
+        if (_duelUnbound)
+        {
+            if (isNewRun)
+            {
+                // 新一局开始：上一局的解绑标记只负责本局，不能跨局拦人。
+                _duelUnbound = false;
+            }
+            else
+            {
+                SelfCheck.Write("[together][diag] Arm：本局已被外部 mod 解绑，跳过读档/重连重新配对");
+                return;
+            }
+        }
+
         if (ReferenceEquals(runState, _armedRunState))
         {
             return;
@@ -114,18 +142,12 @@ internal static class TogetherPair
 
         var players = runState.Players;
 
-        // 成员 = 选人界面里按了「确定为共生体」的人（见 SymbiosisMembers）。
-        // 取"在大厅里确定过、且这一局真的在 Players 里"的人，按 RunState.Players 的顺序排：
-        // 两端必须算出同一个答案，而 Players 顺序来自大厅、两端天然一致，也会写进存档。
-        var confirmed = SymbiosisMembers.Snapshot();
-        var picked = new List<Player>(MaxMembers);
-        foreach (var player in players)
-        {
-            if (confirmed.Contains(player.NetId))
-            {
-                picked.Add(player);
-            }
-        }
+        // ① 外部规则优先（别的 mod 可以要求"正好 2 人 + 指定角色"就成组，见 TogetherApi.RegisterPairRule）；
+        // ② 没有规则命中 → 还是"选人界面里按了「确定为共生体」的人"（见 PickByButtonList）。
+        // 两条路都必须"两端算出同一个答案"，否则锚点会分叉。
+        var picked = TogetherApi.SelectMembersByRule(runState) is { } ruled
+            ? [.. ruled]
+            : PickByButtonList(players);
 
         // 读档 / 重连时选人界面根本没出现过，成员名单是空的 —— 按存档种子找回。
         // 否则按共生体写出来的存档会被当成普通联机局加载（血量/卡组不再共享）。
@@ -164,6 +186,13 @@ internal static class TogetherPair
         _echoes.AddRange(picked.Skip(1));
         _armedRunState = runState;
         _anchorCombatState = null;
+
+        // 解绑时要靠这份记录把回声的卡组换回去；必须在"字段替换"之前抓。
+        OriginalDecks.Clear();
+        foreach (var echo in _echoes)
+        {
+            OriginalDecks[echo] = DeckField(echo);
+        }
 
         // 下面两件事都是"开局一次性"，**只能在新开一局时做**（读档再跑一次就会翻倍）：
         //  - 合并初始卡组：存档按 player.Deck 序列化，而回声的 Deck getter 早已重定向到共享卡组，
@@ -215,6 +244,181 @@ internal static class TogetherPair
         // 兼容层补扫：有些 mod 的程序集可能晚于 mod 初始化才被加载，
         // 进局时再扫一遍（已扫过的程序集直接跳过，成本只有几十个字符串比较）。
         SameOwnerCheckCompat.Apply("run_armed");
+    }
+
+    /// <summary>回落路径：成员 = 选人界面按了「确定为共生体」的人，按 <c>RunState.Players</c> 顺序排。</summary>
+    /// <remarks>
+    /// 取"在大厅里确定过、且这一局真的在 Players 里"的人：两端必须算出同一个答案，
+    /// 而 <c>Players</c> 顺序来自大厅、两端天然一致，也会写进存档。
+    /// </remarks>
+    private static List<Player> PickByButtonList(IReadOnlyList<Player> players)
+    {
+        var confirmed = SymbiosisMembers.Snapshot();
+        var picked = new List<Player>(MaxMembers);
+
+        foreach (var player in players)
+        {
+            if (confirmed.Contains(player.NetId))
+            {
+                picked.Add(player);
+            }
+        }
+
+        return picked;
+    }
+
+    // ======================================================================
+    // 解绑（外部 mod 入口：进 PVP 决斗等）
+    // ======================================================================
+
+    /// <summary>对外入口：本局解除共生体绑定（见 <see cref="UnbindForDuel" />）。</summary>
+    internal static bool Unbind(string reason)
+    {
+        return UnbindForDuel(reason);
+    }
+
+    /// <summary>
+    /// 本局解除共享：关闭共生体开关、清空成员名单并广播，把当前共享卡组按奇偶分成两副，
+    /// 并且<b>本局内不再自动重新配对</b>（读档 / 重连都不会复活；新开一局复位）。
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// 调用后 <see cref="IsActive" /> / <see cref="IsMember" /> 立刻回到普通联机局语义，
+    /// 镜像、共享牌堆、事件并发保护整体停掉，但不影响已经打出去的牌。
+    /// </para>
+    /// <para>
+    /// 分牌口径：把解绑瞬间的共享主卡组按当前顺序列出来（锚点卡组在前、回声卡组在后），
+    /// <b>1-based 序号奇数给 P1（锚点）、偶数给 P2（回声）</b>。决斗事件在事件房里触发、不在战斗中，
+    /// 所以这里只切主卡组；下一场战斗会按各自的新卡组重建抽 / 弃 / 消耗堆。
+    /// </para>
+    /// <para>
+    /// 超过 2 人时 PVP 没有意义：只把回声的卡组字段还原成各自的，不做奇偶分牌，并打一条警告。
+    /// </para>
+    /// </remarks>
+    public static bool UnbindForDuel(string reason)
+    {
+        if (MemberCount < MinMembers)
+        {
+            Log.Info($"[together] 解绑：当前没有激活的共生体配对（{reason}）");
+            return false;
+        }
+
+        var netService = RunManager.Instance?.NetService;
+
+        TogetherSettingsStore.SetSymbiosisEnabled(false);
+        SymbiosisMembers.Reset(netService, reason);
+        TogetherSettingsSync.PublishHostSettings(netService, reason);
+        _duelUnbound = true;
+
+        var memberCount = MemberCount;
+        DeactivateAndSplitForDuel();
+
+        Log.Info($"[together] 解绑完成（{reason}）：原有 {memberCount} 人；共生体开关已关闭，成员名单已清空");
+        return true;
+    }
+
+    private static void DeactivateAndSplitForDuel()
+    {
+        var anchor = _anchor;
+        var echoes = _echoes.ToList();
+
+        if (anchor is not null && echoes.Count == 1)
+        {
+            SplitSharedDeckByParity(anchor, echoes[0]);
+        }
+        else
+        {
+            RestoreEchoDecks(echoes);
+
+            if (anchor is not null && echoes.Count > 1)
+            {
+                Log.Warn(
+                    $"[together] 解绑：共生体有 {echoes.Count + 1} 人，PVP 只支持两人；"
+                    + "已恢复回声卡组但未做奇偶分牌，请带 log 反馈");
+            }
+        }
+
+        ClearPairingState();
+    }
+
+    /// <summary>把当前配对引用全部清掉（不处理卡组拆分；拆分只走解绑那条路）。</summary>
+    private static void ClearPairingState()
+    {
+        _anchor = null;
+        _echoes.Clear();
+        _anchorCombatState = null;
+        _armedRunState = null;
+        OriginalDecks.Clear();
+    }
+
+    /// <summary>
+    /// 把两个人的共享主卡组按 1-based 序号奇偶拆开：奇数张 → 锚点（P1），偶数张 → 回声（P2）。
+    /// </summary>
+    private static void SplitSharedDeckByParity(Player p1, Player p2)
+    {
+        var p1Deck = p1.Deck;
+        var p2Deck = OriginalDecks.TryGetValue(p2, out var originalDeck) ? originalDeck : DeckField(p2);
+
+        // 先换回回声自己的卡组字段：此后 p2.Deck / 卡组界面读到的才是分给他的那一副。
+        DeckField(p2) = p2Deck;
+        RunPileCache(p2) = null;
+
+        if (ReferenceEquals(p1Deck, p2Deck))
+        {
+            Log.Warn("[together] 解绑：P1/P2 卡组是同一实例，无法按奇偶拆分（请带 log 反馈）");
+            return;
+        }
+
+        var ordered = new List<(CardModel Card, CardPile Source)>();
+        var seen = new HashSet<CardModel>(ReferenceEqualityComparer.Instance);
+
+        foreach (var card in p1Deck.Cards.ToList())
+        {
+            if (seen.Add(card))
+            {
+                ordered.Add((card, p1Deck));
+            }
+        }
+
+        foreach (var card in p2Deck.Cards.ToList())
+        {
+            if (seen.Add(card))
+            {
+                ordered.Add((card, p2Deck));
+            }
+        }
+
+        p1Deck.Clear(silent: true);
+        p2Deck.Clear(silent: true);
+
+        for (var i = 0; i < ordered.Count; i++)
+        {
+            var card = ordered[i].Card;
+            var toP1 = (i + 1) % 2 == 1;
+            var targetPile = toP1 ? p1Deck : p2Deck;
+
+            targetPile.AddInternal(card, -1, silent: true);
+            card.GiveToAnotherPlayer(toP1 ? p1 : p2);
+        }
+
+        Log.Info(
+            $"[together] 解绑分牌：共享卡组 {ordered.Count} 张 → "
+            + $"P1({Describe(p1)})={p1Deck.Cards.Count} 张（奇数位），"
+            + $"P2({Describe(p2)})={p2Deck.Cards.Count} 张（偶数位）");
+    }
+
+    private static void RestoreEchoDecks(IEnumerable<Player> echoes)
+    {
+        foreach (var echo in echoes)
+        {
+            if (!OriginalDecks.TryGetValue(echo, out var deck))
+            {
+                continue;
+            }
+
+            DeckField(echo) = deck;
+            RunPileCache(echo) = null;
+        }
     }
 
     /// <summary>把回声的初始卡组并进锚点的卡组：共享卡组 = p1 + p2 + …。</summary>
@@ -316,6 +520,32 @@ internal static class TogetherPair
     public static bool IsMember(Player? player)
     {
         return IsAnchor(player) || IsEcho(player);
+    }
+
+    /// <summary>
+    /// 按 netId 找当前配对里的成员实例（找不到返回 <c>null</c>）。
+    /// </summary>
+    /// <remarks>
+    /// 给"旧 Player 实例"认领用：保存 / 读档 / 重连会重建整个 <c>RunState</c>，
+    /// 重建窗口里新旧实例会并存一小会儿，而成员判定是<b>引用相等</b>（见 <see cref="IsAnchor" />）。
+    /// 拿着旧实例来的逻辑（实测是金币 setter）可以先在这里认回当前实例，再照常处理。
+    /// </remarks>
+    public static Player? MemberByNetId(ulong netId)
+    {
+        if (_anchor is not null && _anchor.NetId == netId)
+        {
+            return _anchor;
+        }
+
+        foreach (var echo in _echoes)
+        {
+            if (echo.NetId == netId)
+            {
+                return echo;
+            }
+        }
+
+        return null;
     }
 
     /// <summary>组内所有成员（锚点在前）。</summary>

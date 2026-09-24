@@ -57,6 +57,17 @@
         <MakeDir Directories="$(ModOutputDir)" />
         <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(ModOutputDir)" />
         <Copy SourceFiles="$(MSBuildProjectDirectory)\$(MSBuildProjectName).json" DestinationFolder="$(ModOutputDir)" />
+        <!-- 对外接口说明也一起发到 mods 目录：依赖方在这里就能看到接口与变更记录 -->
+        <Copy SourceFiles="$(MSBuildProjectDirectory)\API使用说明.md" DestinationFolder="$(ModOutputDir)"
+              Condition="Exists('$(MSBuildProjectDirectory)\API使用说明.md')" />
+        <!-- 架构说明是它的配套（分层 / 补丁清单 / 内部机制），一起发 -->
+        <Copy SourceFiles="$(MSBuildProjectDirectory)\ARCHITECTURE.md" DestinationFolder="$(ModOutputDir)"
+              Condition="Exists('$(MSBuildProjectDirectory)\ARCHITECTURE.md')" />
+        <!--界面文本（设置页 / 选人界面按钮）：DLL 旁边也放一份，
+            这样只改 JSON 就能看到效果，不用重新导出 PCK（PCK 里那份仍然优先由 I18N 合并）-->
+        <Copy SourceFiles="$(MSBuildProjectDirectory)\together\localization\mod_settings\eng.json;$(MSBuildProjectDirectory)\together\localization\mod_settings\zhs.json"
+              DestinationFolder="$(ModOutputDir)\localization\mod_settings" SkipUnchangedFiles="true"
+              Condition="Exists('$(MSBuildProjectDirectory)\together\localization\mod_settings\eng.json')" />
     </Target>
 
     <!--直接调用Godot打包出Pck进mod文件夹-->

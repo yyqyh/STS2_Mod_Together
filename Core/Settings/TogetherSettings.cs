@@ -9,25 +9,25 @@ namespace Together.Core.Settings;
 /// </remarks>
 public sealed class TogetherSettings
 {
-    /// <summary>是否开启"共生体"。</summary>
+    /// <summary>是否开启"合作模式（共享卡组）"。</summary>
     /// <remarks>
-    /// 关闭时本 mod 完全不介入任何对局；开启后，多人选人界面会出现"共生体"按钮，
-    /// 由玩家自己确定谁和谁共用身体（见 <c>SymbiosisMembers</c>）。
+    /// 关闭时本 mod 完全不介入任何对局；开启后，多人选人界面会出现"加入合作模式"按钮，
+    /// 由玩家自己决定谁和谁共用身体（见 <c>SymbiosisMembers</c>）。
     /// <b>以主机设置为准</b>：客户端跟随主机，避免两台机器判定不一致导致分叉。
     /// </remarks>
     public bool SymbiosisEnabled { get; set; }
 
     /// <summary>开局时是否把"回声（p2）"的初始卡组<b>复制</b>进共享卡组。</summary>
     /// <remarks>
-    /// 开启：共生体的卡组 = p1 + p2（两个人各自的初始卡都在里面）。
+    /// 开启：合作模式的卡组 = p1 + p2（两个人各自的初始卡都在里面）。
     /// 关闭：只用锚点（p1）那一副初始卡组，回声那副不参与。
     /// 注意：这是<b>复制</b>，所以两个人选同一个角色时开启它会得到两份初始卡
     /// （两个静默猎手 = 24 张），需要"同角色只要一份"时把它关掉。
-    /// 与共生体开关一样，联机时以主机设置为准。
+    /// 与合作模式开关一样，联机时以主机设置为准。
     /// </remarks>
     public bool MergeStarterDecks { get; set; } = true;
 
-    /// <summary>共生体血量上限提升：把"回声（p2）的最大生命"的百分之几加进共享血池，范围 0~100。</summary>
+    /// <summary>共享血池的血量上限提升：把"回声（p2）的最大生命"的百分之几加进共享血池，范围 0~100。</summary>
     /// <remarks>
     /// 0 = 不加（共享血池 = 锚点自己的上限）；100 = 把 p2 那一整份最大生命也加进来
     /// （等价于两个人的血池合在一起）。
@@ -39,14 +39,15 @@ public sealed class TogetherSettings
     /// </remarks>
     public int HpBonusPercent { get; set; } = 100;
 
-    /// <summary>共生体人数上限（2~4）。</summary>
+    /// <summary>【历史字段，已没有任何读取方】合作人数上限。</summary>
     /// <remarks>
-    /// 这个值是"最多几个人能确定参加共生体"。实际人数由选人界面里按按钮的人决定：
-    /// 只要 ≥2 人就成组（2 人就是原来的双人共生体），没按按钮的玩家照常各玩各的。
-    /// 锚点仍然是"组里 Players 顺序最靠前的那位"，其余成员都是回声：
-    /// 身体、卡组、抽弃牌堆共用，手牌与能量各人各一份。
+    /// 曾经是"最多几个人能加入合作"。现在改成<b>无名额</b>：谁都能按「加入合作模式」，
+    /// 加入的人自成一组，上限由 <c>TogetherPair.MaxMembers</c>（4）硬性截断。
+    /// 现在连设置页和 <c>TogetherSettingsStore</c> 都不再读它（后者固定返回 4）。
+    /// 字段本身保留不删，是为了不改变设置文件与联机快照（<c>TogetherSettingsSync.Snapshot</c>）的结构 ——
+    /// 快照字段数一变，和旧版本 / wa2 那边的解析就对不上了。
     /// </remarks>
-    public int GroupSize { get; set; } = 2;
+    public int GroupSize { get; set; } = 4;
 
     /// <summary>是否共享金币：开启后组内只有一个钱包，谁捡到/花掉都直接改同一份余额。</summary>
     /// <remarks>

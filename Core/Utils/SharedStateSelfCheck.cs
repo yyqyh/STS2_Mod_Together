@@ -1,4 +1,5 @@
 using HarmonyLib;
+using MegaCrit.Sts2.Core.Entities.Multiplayer;
 using MegaCrit.Sts2.Core.Entities.Players;
 using MegaCrit.Sts2.Core.GameActions;
 using MegaCrit.Sts2.Core.Logging;
@@ -8,66 +9,92 @@ using Together.Core.Patches.Deck;
 
 namespace Together.Core.Utils;
 
-/// <summary>自检日志：在生成校验和之前把共享状态打印出来。</summary>
+/// <summary>自检 / 对账日志：把状态按校验和的 <c>id</c> 打出来 —— 两端同一个 id 就是同一步骤。</summary>
 /// <remarks>
-/// 校验和只会告诉你"两端分叉了"并当场把客户端踢下线（<c>NetError.StateDivergence</c>），
-/// 但不会告诉你**哪一步先错**。这份日志把两个 creature 的生命 / 格挡 / 状态，
-/// 以及两个玩家的四个牌堆数量打在一起，分叉时一眼能看出是哪一项先分歧。
-/// 默认关闭（每次动作都会调一次校验和，开着会刷爆日志）。
-/// 打开方式：启动游戏前设置环境变量 <c>TOGETHER_SELFCHECK=1</c>；
-/// 顺带一提，本机双人（Local Multi-Control 的回环主机）没有真正的对端，
-/// 校验和不会报分叉，所以本地测试时这份日志就是唯一的分叉探测器。
+/// <para>
+/// <b>为什么用校验和的 id 当键</b>：本体的 <c>ChecksumTracker.GenerateChecksum</c> 严格按调用顺序递增分配
+/// <c>id</c>，而"校验和必须每端调用同样次数"本身就是本体的硬要求 —— 所以这个 id 天然就是"第几步"，
+/// 两端同一个 id 指的是同一件事。而 context 文案并不唯一（带房间 id、同名回合一局会出现很多次），光凭文案对不上。
+/// </para>
+/// <para>
+/// <b>开关</b>：环境变量 <c>TOGETHER_SELFCHECK</c> 优先（<c>1</c> 开 / <c>0</c> 关）；<b>没设时共享局默认开</b> ——
+/// 自动对账要求两端输出同一个日志集合，一端开一端关必然对不上。刷屏由"只在联机 + 共享激活时出声"控制。
+/// 本机双人（Local Multi-Control 的回环主机）没有真正的对端、校验和不会报分叉，这时这份日志就是唯一的分叉探测器。
+/// </para>
 /// </remarks>
 internal static class SelfCheck
 {
-    private static bool? _enabled;
+    /// <summary>最近一次校验和的 id（0 = 还没打过 / 校验和未启用）。</summary>
+    private static uint _checkpoint;
 
+    /// <summary>最近一次校验和的 id，供其它诊断日志挂上"第几步"。</summary>
+    public static uint CurrentCheckpoint => _checkpoint;
+
+    /// <summary>是否输出。环境变量优先；未设置时 = 本局是不是共享局。</summary>
     public static bool Enabled
     {
         get
         {
-            _enabled ??= string.Equals(
-                Environment.GetEnvironmentVariable("TOGETHER_SELFCHECK"),
-                "1",
-                StringComparison.Ordinal);
+            var env = Environment.GetEnvironmentVariable("TOGETHER_SELFCHECK");
+            if (string.Equals(env, "1", StringComparison.Ordinal))
+            {
+                return true;
+            }
 
-            return _enabled.Value;
+            if (string.Equals(env, "0", StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            return TogetherPair.IsActive;
         }
-        set => _enabled = value;
     }
 
     /// <summary>诊断日志的统一出口：只在自检开启时输出。</summary>
-    /// <remarks>
-    /// 排查期加的那些 <c>[together][diag]</c> 日志都走这里。默认<b>静默</b>，
-    /// 需要时用环境变量 <c>TOGETHER_SELFCHECK=1</c> 打开，避免正常游玩时刷爆日志。
-    /// </remarks>
+    /// <remarks>排查期加的那些 <c>[together][diag]</c> 日志都走这里；输出时自动带上当前的 <c>chk=</c>。</remarks>
     public static void Write(string message)
-    {
-        if (Enabled)
-        {
-            Log.Info(message);
-        }
-    }
-
-    internal static void Report(string context)
     {
         if (!Enabled)
         {
             return;
         }
 
-        if (TogetherPair.Anchor is not { } anchor || TogetherPair.MemberCount < 2)
+        Log.Info(Tag(message));
+    }
+
+    /// <summary>给一行诊断带上"当前是第几步"（还没有 chk 时原样返回）。</summary>
+    public static string Tag(string message)
+    {
+        return _checkpoint == 0 ? message : $"chk={_checkpoint} {message}";
+    }
+
+    /// <summary>校验和生成点的收口：记下 id，并输出两端可对账的状态行。</summary>
+    internal static void Report(uint id, string context)
+    {
+        if (id == 0)
+        {
+            return;   // 校验和没启用（单人局 / 非联机）
+        }
+
+        _checkpoint = id;
+
+        if (!Enabled || TogetherPair.Anchor is not { } anchor)
         {
             return;
         }
 
-        Log.Info($"[together][selfcheck] {context}");
-        Log.Info($"[together][selfcheck]   anchor {Describe(anchor)}");
+        Log.Info(Line(id, context, "anchor", anchor));
 
         foreach (var echo in TogetherPair.Echoes)
         {
-            Log.Info($"[together][selfcheck]   echo   {Describe(echo)}");
+            Log.Info(Line(id, context, "echo", echo));
         }
+    }
+
+    /// <summary>一行对账：<c>[sync] chk=&lt;id&gt; ctx=&lt;context&gt; tag=together.state …</c>。</summary>
+    private static string Line(uint id, string context, string who, Player player)
+    {
+        return $"[sync] chk={id} ctx={context} tag=together.state who={who} netId={player.NetId} {Describe(player)}";
     }
 
     private static string Describe(Player player)
@@ -82,14 +109,16 @@ internal static class SelfCheck
         var piles = combat is null
             ? "-"
             : $"hand={combat.Hand.Cards.Count}"
-              + $",draw={combat.DrawPile.Cards.Count}"
-              + $",discard={combat.DiscardPile.Cards.Count}"
-              + $",exhaust={combat.ExhaustPile.Cards.Count}"
-              + $",play={combat.PlayPile.Cards.Count}"
-              + $",energy={combat.Energy}";
+              + $" draw={combat.DrawPile.Cards.Count}"
+              + $" discard={combat.DiscardPile.Cards.Count}"
+              + $" exhaust={combat.ExhaustPile.Cards.Count}"
+              + $" play={combat.PlayPile.Cards.Count}"
+              + $" energy={combat.Energy}";
+
+        var orbs = combat?.OrbQueue is { } queue ? queue.Orbs.Count.ToString() : "-";
 
         return $"hp={creature?.CurrentHp}/{creature?.MaxHp} block={creature?.Block}"
-               + $" powers=[{powers}] {piles}";
+               + $" powers=[{powers}] {piles} gold={player.Gold} orbs={orbs}";
     }
 }
 
@@ -106,8 +135,8 @@ internal static class SelfCheck
 internal static class ChecksumSelfCheckPatch
 {
     [HarmonyPostfix]
-    private static void Postfix(string __0)
+    private static void Postfix(string __0, ref NetChecksumData __result)
     {
-        SelfCheck.Report(__0);
+        SelfCheck.Report(__result.id, __0);
     }
 }

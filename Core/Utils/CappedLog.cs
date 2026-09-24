@@ -30,7 +30,11 @@ internal static class CappedLog
             }
 
             Counts[key] = count + 1;
-            Log.Info($"[together] {message}{(count + 1 == Limit ? "（后续同类日志已省略）" : string.Empty)}");
+
+            // 带上"当前是第几个校验和"：两端自动对账时，同一 chk 下的这些诊断就能一一对上。
+            Log.Info(
+                $"[together] {SelfCheck.Tag(message)}"
+                + $"{(count + 1 == Limit ? "（后续同类日志已省略）" : string.Empty)}");
         }
     }
 }

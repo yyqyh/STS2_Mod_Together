@@ -19,7 +19,7 @@ public static class Const
     public const string Name = "Together";
 
     /// <summary>版本号，与清单 <c>version</c> 保持一致。</summary>
-    public const string Version = "0.1.0";
+    public const string Version = "0.3.1";
 
     /// <summary>能量颜色标识：卡池 / 遗物池 / 药水池的 <c>EnergyColorName</c> 都返回它，
     /// 用来索引该池的能量图标（<c>res://images/packed/sprite_fonts/{name}_energy_icon.png</c>）。</summary>
@@ -48,6 +48,16 @@ public static class Const
         public const string ImagesRoot = Root + "/images";
         public const string ScenesRoot = Root + "/scenes";
         public const string LocalizationRoot = Root + "/localization";
+
+        /// <summary>
+        /// 界面文本（设置页 / 选人界面的按钮）的多语言目录：<c>res://together/localization/mod_settings</c>。
+        /// </summary>
+        /// <remarks>
+        /// 与"游戏内容表"（<c>localization/{lang}/{cards|relics|...}.json</c>，表名复数）不同：
+        /// 这里给 RitsuLib 的 <c>I18N</c> 用，<b>一个语言一个文件</b>（<c>eng.json</c> / <c>zhs.json</c>），
+        /// 内容是扁平的 <c>key → 文本</c>。见 <c>Core/Text/TogetherUiText.cs</c>。
+        /// </remarks>
+        public const string ModSettingsLocalizationRoot = LocalizationRoot + "/mod_settings";
 
         /// <summary>美术未就绪时的占位路径（指向目录本身，加载必然失败 → 回退到本体贴图）。
         /// 代码里出现 <c>Art(Const.Paths.xxx)</c> 说明这张卡的卡面还没接。</summary>

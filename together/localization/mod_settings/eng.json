@@ -1,0 +1,17 @@
+{
+  "together.settings.page.title": "Together · Co-op Mode",
+  "together.settings.section.title": "Co-op Mode",
+  "together.settings.enabled.label": "Enable co-op mode (shared deck)",
+  "together.settings.enabled.on": "Currently: on — the character-select screen shows a \"Join Co-op Mode\" button; 2+ players joining then share one body.",
+  "together.settings.enabled.off": "Currently: off — this mod stays out of your runs entirely.",
+  "together.settings.merge.label": "Merge starting decks (shared deck = p1 + p2)",
+  "together.settings.merge.description": "On: when a run starts, the other player's (echo / p2) starting deck is copied into the shared deck, so the group plays both players' starting cards together.\nOff: the shared deck only holds the anchor's (p1, the one who joined first) starting deck; the echo's deck is left out.\nNote: it is a copy, so if both players pick the same character you get two starting decks (two Silent = 24 cards). Turn it off to keep just one.",
+  "together.settings.hp.label": "Max HP bonus: percent of p2's max HP (0~100)",
+  "together.settings.hp.placeholder": "e.g. 50",
+  "together.settings.hp.description": "How much of the echo's (p2) max HP is added to the shared HP pool: 0 = none, 100 = all of it.\nApplied once, when a new run starts (the new max is written into the save, so loading or reconnecting never adds it again).\nIntegers 0~100 only; anything else is ignored and the previous value is kept.",
+  "together.settings.gold.label": "Shared gold (one wallet for the group)",
+  "together.settings.gold.description": "On: every member shares one gold balance — whoever picks gold up or spends it in a shop changes the same wallet.\nA new run adds everyone's starting gold together (99 × members; only once per run, loading or reconnecting never adds it again). Off: everyone keeps their own gold.\nIn multiplayer the host's setting wins.",
+  "together.settings.howto.description": "With this on, a \"Join Co-op Mode\" button appears in the bottom-right of the multiplayer character-select screen:\n1. Everyone who wants in presses it — pressing it also counts as pressing the official \"ready\" button; 2+ players joining forms a group that shares one body\n   (HP / Block / status / deck / draw pile / discard pile are all the same one);\n2. Hand and energy stay separate per player (you play yours, I play mine);\n3. There is no player cap, anyone can join; with only 1 player joining no group forms and that run plays as normal multiplayer;\n4. Press it again (or press the official \"unready\" button) to leave co-op and go back to the normal ready state;\n5. Once everyone is ready the game starts the run as usual;\n6. Everyone can pick any character (even the same one); whose starting cards go into the shared deck is decided by \"Merge starting decks\" above (with it on, every echo's starting cards are merged in);\n7. With this switch off, the mod stays out of your runs entirely (a normal vanilla run).\nIn multiplayer the host's settings win.",
+  "together.button.join": "Join Co-op Mode",
+  "together.button.leave": "Leave Co-op Mode"
+}

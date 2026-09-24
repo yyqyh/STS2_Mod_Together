@@ -70,17 +70,15 @@ internal static class TogetherSettingsStore
         }
     }
 
-    /// <summary>本机设置里的"共生体人数上限"（已夹到 2~4）。</summary>
-    public static int GroupSize
-    {
-        get
-        {
-            Initialize();
-
-            var settings = RitsuLibFramework.GetDataStore(Const.ModId).Get<TogetherSettings>(DataKey);
-            return Math.Clamp(settings?.GroupSize ?? 2, TogetherPair.MinMembers, TogetherPair.MaxMembers);
-        }
-    }
+    /// <summary>
+    /// "合作人数上限"。<b>历史字段：已不参与判定</b>，固定返回硬上限 <see cref="TogetherPair.MaxMembers" />。
+    /// </summary>
+    /// <remarks>
+    /// 以前读的是设置里那一项（2~4）。现在没有名额了，<b>不再读存档里的旧值</b> ——
+    /// 否则老配置里存着的 2 会被照搬出去（设置页已经改不掉它），对外看起来就是个"改不动的假设置"。
+    /// 字段保留只是为了联机快照（<c>TogetherSettingsSync.Snapshot</c>）的结构不变。
+    /// </remarks>
+    public static int GroupSize => TogetherPair.MaxMembers;
 
     /// <summary>本机设置里的"是否共享金币"。</summary>
     public static bool ShareGold
@@ -149,6 +147,21 @@ internal static class TogetherSettingsStore
         }
 
         return ids.Count > 0 ? ids.ToArray() : null;
+    }
+
+    /// <summary>把"共生体开关"写成本值并落盘（解绑时用；设置页仍走原来的绑定通道）。</summary>
+    /// <remarks>
+    /// 给"代码里要关掉这个开关"的场景补一条最小写入路径（目前只有 <c>TogetherApi.Unbind</c> 用它）：
+    /// 落盘之后由 <c>TogetherSettingsSync.PublishHostSettings</c> 把新值广播给客户端，
+    /// 设置页读的也是同一份，所以界面上会跟着变成关。
+    /// </remarks>
+    public static void SetSymbiosisEnabled(bool value)
+    {
+        Initialize();
+
+        var store = RitsuLibFramework.GetDataStore(Const.ModId);
+        store.Modify<TogetherSettings>(DataKey, settings => settings.SymbiosisEnabled = value);
+        store.Save(DataKey);
     }
 
     public static void Initialize()

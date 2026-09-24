@@ -3,8 +3,11 @@ using MegaCrit.Sts2.Core.Entities.Creatures;
 using MegaCrit.Sts2.Core.Entities.Orbs;
 using MegaCrit.Sts2.Core.Entities.Players;
 using MegaCrit.Sts2.Core.Models;
+using MegaCrit.Sts2.Core.Multiplayer.Game;
+using MegaCrit.Sts2.Core.Runs;
 
 using Together.Core.Combat;
+using Together.Core.Settings;
 using Together.Core.Utils;
 
 namespace Together.Core.Api;
@@ -156,6 +159,135 @@ public static class TogetherApi
     {
         return DeterministicCardOrder.Fingerprint(cards);
     }
+
+    /// <summary>
+    /// 打一个"对账点"：生成一次校验和（两端同一步骤必然拿到同一个 <c>chk</c> 号）、
+    /// 输出一行 <c>[sync] chk=… ctx=… tag=together.state …</c>，并返回这个号。
+    /// </summary>
+    /// <param name="tag">你自己的短标签（会进 context，形如 <c>together:&lt;tag&gt;</c>）。</param>
+    /// <param name="data">可选补充信息（同 tag 下区分不同场景）。</param>
+    /// <returns>这次的 <c>chk</c> 号；<b>0 = 校验和未启用</b>（单人局 / 非联机），调用方应当忽略。</returns>
+    /// <remarks>
+    /// <para>
+    /// 用法：你的 mod 想把自己的状态跟对端（或跟 together）对齐时，先调它拿到号，再把自己的状态打进同一批日志
+    /// （自己带 <c>chk=&lt;号&gt;</c> 即可），这样两份 log 里同一个号下的行就能直接对照。
+    /// </para>
+    /// <para>
+    /// <b>两端必须都调用、且调用次数完全一致</b>：校验和的 <c>id</c> 严格按调用顺序递增，
+    /// 多调（或少调）一次会让<b>之后所有号全部错位</b>，本体自己的校验和比对会报假分歧。
+    /// 所以不要放在"只有一边会走"的分支里。
+    /// </para>
+    /// </remarks>
+    public static uint Checkpoint(string tag, string data = "")
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(tag);
+
+        if (RunManager.Instance?.ChecksumTracker is not { } tracker)
+        {
+            return 0;
+        }
+
+        var context = string.IsNullOrWhiteSpace(data) ? $"together:{tag}" : $"together:{tag} {data}";
+        return tracker.GenerateChecksum(context, null).id;
+    }
+
+    // ======================================================================
+    // 配对规则：把"谁该成组"的判定权交给别的 mod
+    // ======================================================================
+
+    private static readonly List<(string Name, Func<IRunState, IReadOnlyList<Player>?> Select)> PairRules = [];
+
+    /// <summary>
+    /// 注册"谁该成组"的判定规则。返回 <c>null</c>（或空列表）表示这条规则不管这一局，继续问下一条；
+    /// 全部都没有结果时回落到本 mod 的现有行为（选人界面按下「共生体」按钮的名单）。
+    /// </summary>
+    /// <remarks>
+    /// <para>请在 mod 初始化（注册内容）时调用一次。</para>
+    /// <para>
+    /// <b>规则必须满足</b>：① 只读，不改任何游戏状态；② 只依据 <see cref="IRunState.Players" /> 与
+    /// <c>Player.Character</c> 这类"两端一致"的事实 —— 两边必须算出同一个名单、顺序也一致（按 Players 顺序），
+    /// 否则锚点会分叉；③ 不要用 <c>LocalContext</c> 之类的"本机视角"。
+    /// </para>
+    /// <para>规则只在 <c>Arm()</c> 里被问（新开一局 / 读档 / 重连都会走），不在战斗中途问。</para>
+    /// </remarks>
+    public static void RegisterPairRule(string name, Func<IRunState, IReadOnlyList<Player>?> select)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        ArgumentNullException.ThrowIfNull(select);
+
+        PairRules.Add((name, select));
+    }
+
+    /// <summary>按注册顺序问一遍规则；都没有结果返回 <c>null</c>。单条规则抛异常只废掉它自己。</summary>
+    internal static IReadOnlyList<Player>? SelectMembersByRule(IRunState runState)
+    {
+        foreach (var (name, select) in PairRules)
+        {
+            try
+            {
+                if (select(runState) is { Count: > 0 } picked)
+                {
+                    return picked;
+                }
+            }
+            catch (Exception ex)
+            {
+                // 外部 mod 一个 bug 不该让开局黑屏：单条规则出错只跳过本条。
+                Main.Logger.Warn($"[together] 配对规则 {name} 抛异常，本条跳过：{ex.Message}");
+            }
+        }
+
+        return null;
+    }
+
+    // ======================================================================
+    // 绑定状态 / 解绑
+    // ======================================================================
+
+    /// <summary>
+    /// 当前是否已配对（<c>Arm()</c> 过且没被 <see cref="Unbind" />）。
+    /// </summary>
+    /// <remarks>
+    /// <b>它不看"是否联机"</b>：要判"战场行为现在有没有在共享"请用 <see cref="IsActive" />。
+    /// 两个都对外，别用错。
+    /// </remarks>
+    public static bool IsBound => TogetherPair.MemberCount >= TogetherPair.MinMembers;
+
+    /// <summary>
+    /// 本局解除共生体绑定：立刻断开共享（镜像 / 共享牌堆 / 事件并发保护整体停掉），
+    /// 把共享卡组按奇偶拆给两人，并把共生体开关置 false；<b>本局内不再自动重新配对</b>（新开一局复位）。
+    /// </summary>
+    /// <param name="reason">只进日志的触发来源。</param>
+    /// <returns>本来就没绑定则返回 <c>false</c>。</returns>
+    public static bool Unbind(string reason = "external")
+    {
+        return TogetherPair.Unbind(reason);
+    }
+
+    // ======================================================================
+    // 设置（生效值：联机时客户端跟随主机，和设置页 / 同步用的是同一份）
+    // ======================================================================
+
+    /// <summary>共生体开关的生效值。</summary>
+    public static bool SymbiosisEnabled => TogetherSettingsSync.EffectiveSymbiosisEnabled;
+
+    /// <summary>
+    /// 合作人数上限的生效值（2~4）。
+    /// </summary>
+    /// <remarks>
+    /// <b>历史字段：已经不影响任何判定</b>（现在没有名额限制，谁都能加入，加入的人自成一组，
+    /// 上限由 <c>TogetherPair.MaxMembers</c> 硬截断）。保留只为兼容已经读它的外部 mod 和联机快照字段数。
+    /// </remarks>
+    public static int GroupSize => TogetherSettingsSync.EffectiveGroupSize;
+
+    /// <summary>开局是否合并双方初始卡组的生效值。</summary>
+    public static bool MergeStarterDecks => TogetherSettingsSync.EffectiveMergeStarterDecks;
+
+    /// <summary>血量上限提升百分比的生效值（0~100）。</summary>
+    public static int HpBonusPercent => TogetherSettingsSync.EffectiveHpBonusPercent;
+
+    /// <summary>是否共享金币的生效值。</summary>
+    public static bool ShareGold => TogetherSettingsSync.EffectiveShareGold;
 }
 
 /// <summary>能力的镜像策略（对外版，见 <see cref="TogetherApi.RegisterPowerMirrorOverride" />）。</summary>
