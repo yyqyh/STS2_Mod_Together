@@ -91,7 +91,7 @@ internal static class TogetherSettingsSync
         }
     }
 
-    /// <summary>本局实际生效的"共生体人数上限"（2~4，客户端跟随主机）。</summary>
+    /// <summary>本局实际生效的"合作人数上限"（2~4，客户端跟随主机）。<b>历史字段：已不参与任何判定</b>，只为保持快照字段数不变。</summary>
     public static int EffectiveGroupSize
     {
         get

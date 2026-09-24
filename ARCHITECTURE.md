@@ -26,7 +26,7 @@
                                       ▲
    L1 共享域          身体 · 牌堆 · 能力(power) · 球位 · 召唤物 · 金币
                                       ▲
-   L0 底座            谁是共生体 · 总闸门 · 设置 · 日志/自检
+   L0 底座            谁是成员 · 总闸门 · 设置 · 日志/自检
 ```
 
 | 层 | 职责（一句话） | 代表类型 | 目录 |
@@ -50,7 +50,9 @@
 | **锚点 / 回声**（`TogetherPair`） | 锚点 = `RunState.Players` 顺序里最靠前的成员，权威实例（主卡组 + 四口战斗牌堆）挂在它身上；其余是回声，访问入口重定向到锚点，但**手牌与能量独立**。锚点由 `Players` 顺序决定 —— 两端天然一致、且写进存档，**不能用本机视角（`LocalContext`）判**，否则第一次抽牌就分叉 |
 | **总闸门** `TogetherPair.IsActive` | = 已配对 **且** 联机。镜像 / 球位 / 召唤物 / 金币 / 事件保护……全部只看它。带"联机"这一条是必须的：配对按设计"非共生体局不清空"，单人局里可能残留上一局的配对 |
 | **激活时机** `Arm` | 必须**晚于** `RunState` 构造（`CreateShared` 会遍历牌组给每张卡设 owner，提前激活会让 p2 读到被重定向的卡组 → "同一张牌设两次 owner" → 开局黑屏）。入口：`RunStateReadyPatch`（新局 / 读档两条） |
-| **成员名单** | 选人界面按按钮 → `SymbiosisMembers`（主机权威 + sidecar 同步）；进局后由 `RunMembersSync` 广播"本局成员"，供草蜢等判据用（它不能依赖选人界面那份，读档/重连时是空的） |
+| **成员名单** | 选人界面按「加入合作模式」→ `SymbiosisMembers`（主机权威 + sidecar 同步，**无名额限制**）；进局后由 `RunMembersSync` 广播"本局成员"，供草蜢等判据用（它不能依赖选人界面那份，读档/重连时是空的） |
+| **成员来源（可外部接管）** | `Arm()` 里先问外部注册的**配对规则**（`TogetherApi.RegisterPairRule`），都没有结果才回落"选人界面按了「加入合作模式」的名单"；规则算出的名单同样会被 `RunMembersSync` 广播，所以规则只要"两端各自算得一样"即可 |
+| **解绑（外部 mod 入口）** | `TogetherApi.Unbind(reason)`：关开关 + 清成员名单并广播 + 置"本局不再自动配对"标记 + 把共享主卡组按 **1-based 奇偶**（奇数→锚点、偶数→回声）拆回两人；新开一局复位。超过 2 人只还原各自卡组 + warning |
 | **设置** | `TogetherSettings`（持久化）/ `TogetherSettingsStore`（读写）/ `TogetherSettingsSync`（**联机以主机为准**，sidecar 发布订阅）/ `TogetherModSettingsPage`（设置页）。所有读取都走 `Effective*` 属性，不直接读 Store |
 
 ### L1 共享域（"一个"是怎么实现的）
@@ -62,7 +64,7 @@
 | **能力**（`PowerMirror` + `PowerPayload` + `PowerApplySource`） | 见 §2.1 | 见 §2.1 |
 | **球位**（`OrbSlotSharing`） | 换 `PlayerCombatState.OrbQueue` 字段 → 两人操作/显示同一口队列；容量补成"各成员基础球位之和"（上限 10×n） | 回合钩子 `AfterTurnStart`/`BeforeTurnEnd` 是**逐玩家**调的，共享后必须只让队列主人跑；界面是按节点增量画的，要镜像；`PlayerCombatState` 会被下一场战斗**沿用** → 每回合重挂一次 |
 | **召唤物**（`SummonMirror` + 扇形召唤） | 本体召唤逐玩家 → 任一成员召唤时**扇形**对队友各调一次本体入口；血量用镜像维持（只推 hp/maxHp，不推格挡） | 召唤期间**不推镜像**（否则"5→5→再5→10 翻倍"）；`DieForYouPower` 的本体判定是"只替召出它的那个人挡"→ 共享身体下要放开 |
-| **金币**（`GoldMirror`） | `Player.Gold` 的 setter 是唯一收口 → 谁变推给组里其他人 | 新局**求和**（99×人数）、读档只取最大值对齐（否则每次重连翻倍） |
+| **金币**（`GoldMirror`） | `Player.Gold` 的 setter 是唯一收口 → 谁变推给组里其他人；<br>重建窗口（保存 / 读档 canonicalize）里**旧 `Player` 实例**被写时，按 netId 认领回当前实例、用**当前实例的值**继续镜像（不推旧身那份存档值，否则等于把钱包打回去） | 新局**求和**（99×人数）、读档只取最大值对齐（否则每次重连翻倍） |
 
 #### 2.1 能力（power）镜像 —— 本 mod 最复杂的一块
 
@@ -104,8 +106,9 @@
 | 组件 | 作用 |
 |---|---|
 | `RoomFlowDiag` + `HangWatchdog` | 房间流程里程碑日志；黑屏探针 + 自愈（转场遮罩卡在黑色时强制淡回） |
-| `SharedStateSelfCheck` | 校验和生成点把两端状态打出来（默认静默，`TOGETHER_SELFCHECK=1` 开） |
+| `SharedStateSelfCheck` | 校验和生成点把两端状态打出来（共享局默认开，`TOGETHER_SELFCHECK=0` 可静音） |
 | `CappedLog` | 每个键最多 N 条的普通日志（功能取证默认可见，不刷屏） |
+| `TogetherUiText` | 界面文本（设置页 / 选人界面按钮）唯一出口：按游戏语言取中/英。文本在 `together/localization/mod_settings/{eng,zhs}.json`（RitsuLib `I18N`），代码里那份中文是最后回退 |
 | 取证键一览 | `hook.dedupe` / `move.shared_cards` / `power.payload(.field/.skip)` / `power.replay` / `power.mirror(.skip)` / `event.*` / `order.probe` / `gold.*` / `orb.*` / `summon.*` / `steal.*` |
 
 ---
@@ -120,7 +123,7 @@
 | 类 | 挂点 | 作用 |
 |---|---|---|
 | `RunStateReadyPatch` | `RunState.CreateForNewRun` / `FromSerializable` | 跑局就绪后激活配对（只有新局才加血量上限 / 合并初始卡组） |
-| `CharacterSelectPatches` | 选人界面 4 个方法 | 装「共生体」按钮、跟随换人刷新、起程门控 |
+| `CharacterSelectPatches` / `CharacterSelectUnreadyPatches` | 选人界面 4 个方法 + 本体"取消准备" | 装「加入合作模式」按钮、跟随换人刷新；按下 = 登记 + 反射调本体 `OnEmbarkPressed`（= 确认准备），再按 = 取消登记 + `OnUnreadyPressed`。**没有起程门控**（开局交给本体 ready 流程） |
 | `HostStartSettingsSyncPatch` / `HostPeerReadySettingsSyncPatch` / `ClientResetSettingsSyncPatch` | 主机开服 / 对端就绪 / 客户端连接与断开 | 设置与成员名单的 sidecar 广播与清理 |
 | `RoomFlowDiagPatches` | 房间里程碑 8 个方法 | 只看不改的日志 + 两处拉起看门狗 |
 | `ChecksumSelfCheckPatch` | `ChecksumTracker.GenerateChecksum` | 校验和前的自检输出 |
@@ -187,6 +190,9 @@
 
 ## 5. 对外接口（依赖开发用）
 
+> **接口的正式说明与变更记录在仓库的 [`API使用说明.md`](../together/API使用说明.md)**
+> （同时随构建复制到 `…\mods\together\`）。本节只列"有哪些面"，用法、示例与版本承诺看那份。
+
 ### 5.1 依赖方式
 
 - 引用 `together.dll`（`mods/together/together.dll`），或直接反射调用 `Together.Core.Api.TogetherApi`。
@@ -199,7 +205,7 @@
 |---|---|
 | `ModId` / `Version` | 本 mod 标识与版本 |
 | `IsActive` | **总闸门**：本局是不是共享局（联机 + 已配对） |
-| `IsMember(Player?)` | 某玩家是不是共生体成员 |
+| `IsMember(Player?)` | 某玩家是不是合作组成员 |
 | `Anchor` | 锚点（权威实例持有者） |
 | `Members` / `OthersOf(Player?)` / `Counterpart(Player?)` | 组成员 / 除某人外的成员 / 某人的队友（两人局就是另一个人） |
 | `OtherBody(Creature?)` | 共享身体里"另一位成员的身体" |
@@ -208,6 +214,9 @@
 | `IsMirroredPower(PowerModel)` | 这份能力是不是本 mod 的镜像副本 |
 | `RegisterPowerMirrorOverride(Type, PowerMirrorPolicy)` | 声明某个能力的镜像策略（`Mirror` / `SingleInstance`） |
 | `RegisterPetKeyRule(...)` / `RegisterPetPairing(...)` | 召唤物配对的扩展点 |
+| `RegisterPairRule(name, select)` | **配对规则**：注册"谁该成组"的判定（返回 `null` = 本条不管，全部 `null` 回落"按按钮的名单"） |
+| `IsBound` / `Unbind(reason)` | 是否已配对（**不看联机**）/ **本局解绑**：断开共享 + 按奇偶拆卡组 + 本局不再自动配对 |
+| `SymbiosisEnabled` / `GroupSize` / `MergeStarterDecks` / `HpBonusPercent` / `ShareGold` | 设置的**生效值**（联机时客户端跟随主机） |
 | `PileFingerprint(IEnumerable<CardModel>?)` | 顺序指纹（自检 / 对 log 用） |
 
 ### 5.3 用法示例
@@ -246,7 +255,7 @@ together/
     ├── Api/TogetherApi.cs        ★ 对外接口（唯一 public 面）
     ├── Combat/Together/
     │   ├── TogetherPair.cs       L0 锚点/回声 + 总闸门 + Arm
-    │   ├── TogetherCoopGate.cs   L0 选人门控
+    │   ├── TogetherCoopGate.cs   L0 选人阶段查询（Applies / 谁已加入；无名额、无门控）
     │   ├── TogetherMirrors.cs    L1 身体镜像 + 能力镜像内核（BodyMirror / PowerMirror）
     │   ├── PowerPayload.cs       L1 能力内部数据 + 自身字段搬运
     │   ├── PowerApplySource.cs   L1 "这次施加是卡还是能力衍生"
@@ -261,8 +270,11 @@ together/
     │   ├── Combat/{HookPatches,PowerPatches}.cs   L2 监听去重 / 注能 / 回合末 / 生成牌落点
     │   └── Deck/{SharedPile,CardOwnership,PileView,RandomPick,SameOwnerCheckCompat,Steal}Patches.cs
     ├── Settings/{TogetherSettings,TogetherSettingsStore,TogetherSettingsSync,TogetherModSettingsPage}.cs
-    └── Utils/{CappedLog,ModelAccess,DeterministicCardOrder,CreaturePartnerExtensions,RoomFlowDiag,SharedStateSelfCheck}.cs
+    └── Utils/{CappedLog,ModelAccess,DeterministicCardOrder,CreaturePartnerExtensions,RoomFlowDiag,SharedStateSelfCheck,TogetherUiText}.cs
 ```
+
+界面文本（不进程序集）：`together/localization/mod_settings/{eng,zhs}.json` —— RitsuLib `I18N` 的扁平 `key → 文本`，
+一个语言一个文件；构建时另复制一份到 `mods/together/localization/mod_settings/`，改 JSON 不必重导 PCK。
 
 ---
 

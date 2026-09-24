@@ -995,11 +995,26 @@ internal static class GoldMirror
 
         if (!TogetherPair.IsMember(player))
         {
-            // 诊断：如果商店/事件拿的是"过期的 Player 对象"，这里会刷出来，一看就知道是对象引用的问题。
+            // 保存 / 读档 / 重连会把 RunState 重建一遍：重建窗口里新实例已经被改成存档值，
+            // 成员判定还是旧的（引用相等），所以新实例走到这里 —— 按 netId 认领回当前实例。
+            var claimed = TogetherPair.MemberByNetId(player.NetId);
+            if (claimed is null)
+            {
+                // 真的不在组里（没开共享 / 不是这局的成员）：留一条诊断，一眼能看出是对象引用的问题。
+                CappedLog.Info(
+                    "gold.skip",
+                    $"金币变化没同步（这个对象不在当前共生体里）：netId={player.NetId} gold={player.Gold}");
+                return;
+            }
+
+            // 认领回来后**用当前实例的值**继续镜像，不推旧身带的那个值：
+            // 实测旧身带的是"存档里那一份"——Setsuna 那局旧回声是 99，而共享余额已经是 198，
+            // 推出去等于把钱包打回去，紧接着 Arm 的"取最大值对齐"还会把这个错值固化下来。
             CappedLog.Info(
-                "gold.skip",
-                $"金币变化没同步（这个对象不在当前共生体里）：netId={player.NetId} gold={player.Gold}");
-            return;
+                "gold.reclaim",
+                $"金币变化来自重建中的实例（RunState 重建窗口）：netId={player.NetId}"
+                + $" 该实例={player.Gold} 当前成员={claimed.Gold} → 改用当前成员继续镜像");
+            player = claimed;
         }
 
         var synced = 0;

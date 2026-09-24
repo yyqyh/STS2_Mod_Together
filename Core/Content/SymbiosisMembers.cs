@@ -7,24 +7,20 @@ using MegaCrit.Sts2.Core.Multiplayer.Game;
 using MegaCrit.Sts2.Core.Multiplayer;
 using MegaCrit.Sts2.Core.Runs;
 using STS2RitsuLib.Networking.Sidecar;
-using Together.Core.Settings;
 
 namespace Together.Core.Content;
 
-/// <summary>共生体成员：在选人界面按了"确定为共生体"的玩家集合。</summary>
+/// <summary>合作模式成员：在选人界面按了「加入合作模式」的玩家集合。</summary>
 /// <remarks>
-/// <b>主机权威</b>：客户端只能发"我想确定/取消"的请求，由主机校验（只能确定自己 + 最多两个名额）后落库并广播。
+/// <b>主机权威</b>：客户端只能发"我想加入/退出"的请求，由主机校验（<b>只能代表自己</b>）后落库并广播。
 /// 用的是 RitsuLib 的 sidecar 配置同步（和设置开关同一套机制，WineFox 也在用）：
 /// 主机 <c>RegisterTopic</c> 写本地集合 → <c>PublishHostState</c> 广播；客户端 <c>TryRequestClientChange</c> 发请求 →
 /// 主机批准后广播 → 客户端在 <c>TopicChanged</c> 里更新缓存。
-/// 这样"两个人确定后第三个人不能确定"在两端都是同一个判定，不会出现一边能按一边不能按的分叉。
+/// 这样"谁加入了"在两端是同一份，不会出现一边算成组、一边不算的分叉。
 /// 单机（本地多控）时网络服务是 Host，走"主机"这条路：本地判定 + 广播，天然支持一台机器上轮流操作多个本地玩家。
 /// </remarks>
 internal static class SymbiosisMembers
 {
-    /// <summary>名额：共生体最多几个人（设置里的"共生体人数上限"，2~4，联机以主机为准）。</summary>
-    public static int Capacity => TogetherSettingsSync.EffectiveGroupSize;
-
     private const string Topic = "together.symbiosis_members";
 
     private static readonly Lock Gate = new();
@@ -69,7 +65,7 @@ internal static class SymbiosisMembers
     /// <c>SetUpNewMultiplayer</c> 才会把 <c>lobby.NetService</c> 装进去，
     /// 所以此刻 <c>RunManager.Instance.NetService</c> 还是未初始化的值 →
     /// 主机把客户端的请求<b>静默丢掉</b>（一条日志都不留）。
-    /// 实测表现就是"联机时非主机按右下角的「确定参加共生体」没有任何反应"。
+    /// 实测表现就是"联机时非主机按右下角的「加入合作模式」没有任何反应"。
     /// 大厅用的服务对象与进局时 <c>SetUpNewMultiplayer</c> 收到的 <c>lobby.NetService</c>
     /// <b>是同一个</b>，所以这里提前绑定不会造成两端分叉；进局时本体再赋一次同样的值。
     /// </remarks>
@@ -92,7 +88,7 @@ internal static class SymbiosisMembers
             RunManagerNetService(runManager) = netService;
             Log.Info(
                 $"[together] 已把大厅网络服务提前挂到 RunManager（{netService.Type} netId={netService.NetId}），"
-                + "否则主机会把选人界面的共生体请求丢掉");
+                + "否则主机会把选人界面的合作模式请求丢掉");
         }
         catch (Exception ex)
         {
@@ -123,11 +119,11 @@ internal static class SymbiosisMembers
         }
 
         RegisterTopicFromLocal();
-        Log.Info("[together] 客户端：本地共生体名单已重置（修订号归 1，等待主机广播）");
+        Log.Info("[together] 客户端：本地合作模式名单已重置（修订号归 1，等待主机广播）");
         Changed?.Invoke();
     }
 
-    /// <summary>这位玩家是不是已经确定参加共生体。</summary>
+    /// <summary>这位玩家是不是已经加入合作模式。</summary>
     public static bool IsConfirmed(ulong playerId)
     {
         lock (Gate)
@@ -162,7 +158,7 @@ internal static class SymbiosisMembers
     }
 
     /// <summary>
-    /// 确定 / 取消一位玩家的共生体身份。
+    /// 加入 / 退出合作模式（由玩家在选人界面按按钮触发）。
     /// </summary>
     /// <returns>请求是否被本地接受（客户端只代表"已发出"，最终以主机广播为准）。</returns>
     public static bool TrySet(INetGameService? netService, ulong playerId, bool confirm, string reason)
@@ -177,12 +173,6 @@ internal static class SymbiosisMembers
                 Topic,
                 new Delta(Key(playerId), confirm),
                 reason);
-        }
-
-        if (!CanApply(playerId, confirm))
-        {
-            Log.Info($"[together] 共生体名额已满，拒绝 player={playerId} 的确定请求");
-            return false;
         }
 
         lock (Gate)
@@ -251,19 +241,6 @@ internal static class SymbiosisMembers
         Changed?.Invoke();
     }
 
-    private static bool CanApply(ulong playerId, bool confirm)
-    {
-        if (!confirm)
-        {
-            return true;
-        }
-
-        lock (Gate)
-        {
-            return Local.Contains(Key(playerId)) || Local.Count < Capacity;
-        }
-    }
-
     private static void ApplyLocal(string key, bool confirm)
     {
         if (confirm)
@@ -294,8 +271,9 @@ internal static class SymbiosisMembers
             ApplyDelta);
     }
 
-    /// <summary>主机的校验：只允许"确定自己"，且最多两个名额。</summary>
+    /// <summary>主机的校验：只允许"代表自己"加入 / 退出。</summary>
     /// <remarks>
+    /// 没有名额限制：几个人的大厅都能加入，加入的人自成一组。
     /// 这段在 RitsuLib 的主题锁里执行，所以只碰我们自己的 <see cref="Gate" />，
     /// 并且绝不在持有 <see cref="Gate" /> 时回调 RitsuLib（避免锁顺序反转）。
     /// </remarks>
@@ -307,15 +285,7 @@ internal static class SymbiosisMembers
             return false;
         }
 
-        if (!delta.Confirm)
-        {
-            return true;
-        }
-
-        lock (Gate)
-        {
-            return Local.Contains(delta.Player) || Local.Count < Capacity;
-        }
+        return true;
     }
 
     private static State ApplyDelta(State state, Delta delta)
