@@ -30,17 +30,24 @@
 依赖会被**拓扑排序**（together 先加载），缺少依赖时你的 mod 直接 `Failed`。
 `min_version` 请写"真正带上你要用的那些接口的版本"（见 §8 变更记录）。
 
-### 1.2 调用方式：推荐 RitsuLib 的 `ModInterop`（不需要编译期引用）
+### 1.2 调用方式：RitsuLib 的 `[AssemblyInterop]` / `[ModInterop]`（不需要编译期引用）
 
 不要直接引用 `together.dll`：本体只对 `sts2` / `0Harmony` 做程序集解析兜底，
 直接引用会让"版本号对不上"变成加载失败。
 
-推荐用 RitsuLib 的互操作存根 —— 运行时按 mod id 转发到 `TogetherApi`，**不产生编译期依赖**：
+用 RitsuLib 的互操作存根 —— 运行时把存根的调用转到 `TogetherApi`，**不产生编译期依赖**。
+官方教程（<https://tutorials.sts2modding.com/docs/04-ritsulib/04-30-mod-integration/>）里**更推荐 `[AssemblyInterop]`**：
+它按"程序集限定类型名"解析，不要求对方在 RitsuLib 里登记过 mod id。本 mod 的两个坐标是：
+
+```text
+程序集：together            类型：Together.Core.Api.TogetherApi
+```
 
 ```csharp
 using STS2RitsuLib.Interop;
 
-[ModInterop("together", "Together.Core.Api.TogetherApi")]
+// 推荐写法：类型名带 ", 程序集名"
+[AssemblyInterop("Together.Core.Api.TogetherApi, together")]
 internal static class TogetherInterop
 {
     // 只声明你真正要用的成员；签名照抄 TogetherApi。
@@ -53,6 +60,18 @@ internal static class TogetherInterop
 }
 ```
 
+想只用 mod id 也可以（两种写法等价，**含逗号 → 走 AssemblyInterop 路径，不含 → 走 ModInterop**，
+所以同一个项目里可以混着写）：
+
+```csharp
+[ModInterop("together", "Together.Core.Api.TogetherApi")]
+internal static class TogetherInterop { /* 同上 */ }
+```
+
+**名称/类型不一致时**用 `[InteropTarget("远端类型", "远端成员名")]` 手动指；要包装**实例类型**
+（比如把对方的对象包成自己这边的引用类）就用嵌套类继承 `InteropClassWrapper` —— 两种写法都支持，
+细节见教程。委托参数（`Func<…>`）正常可用，只要**参数/返回类型是两边都能命名的类型**。
+
 约定（来自 RitsuLib 的实现）：
 
 * 存根成员必须有**方法体**，且**只有一个 `ret`**（`=> default;` / `{ return default; }` 都行）；
@@ -60,6 +79,67 @@ internal static class TogetherInterop
   需要改名/换类型时用 `[InteropTarget("类型", "成员名")]`）；
 * 解析成功时日志里有 `[ModInterop] Generated interop method xxx`；
   解析失败时该存根**返回默认值而不抛异常** —— 所以请用 `IsActive` 之类的语义开关判断，别直接依赖返回值非 null。
+
+**本 mod 接口的 interop 友好度**（照 RitsuLib 的匹配规则：存根参数类型可**更宽**，`object` 视为通配符；
+但**值类型之间不做转换**）：
+
+| 接口 | 能否零引用走 interop | 说明 |
+|---|---|---|
+| `IsActive` / `IsBound` / `Members` / `Counterpart` / `OtherBody` / `PileFingerprint` / `Checkpoint` … | ✅ | 参数/返回都是游戏类型、`System.*` 或我们之外的 pubic 类型 |
+| `RegisterPairRule(name, Func<…>)` / `RegisterPetKeyRule` / `RegisterPetPairing` | ✅ | 委托的参数类型都是游戏类型（`IRunState` / `Player` / `Creature`） |
+| `RegisterPowerMirrorOverride(Type, PowerMirrorPolicy)` | ❌ | 枚举 `PowerMirrorPolicy` 在我们程序集里，存根命名不了它（值类型不转换） |
+| `RegisterPowerMirrorOverride(Type, bool singleInstance)` | ✅ | **为此新增的跨 mod 重载**：`false` = 每人一份（默认），`true` = 只留一份 |
+
+### 1.3 可以直接抄的存根模板
+
+把下面整个文件抄进你自己的工程（改一下命名空间即可）——**不需要引用 `together.dll`**，
+参数与返回类型都是游戏类型 / `System.*`，两边都能命名：
+
+```csharp
+// TogetherInterop.cs
+using MegaCrit.Sts2.Core.Entities.Creatures;
+using MegaCrit.Sts2.Core.Entities.Players;
+using MegaCrit.Sts2.Core.Runs;
+using STS2RitsuLib.Interop;
+
+namespace 你的命名空间;
+
+[AssemblyInterop("Together.Core.Api.TogetherApi, together")]
+internal static class TogetherInterop
+{
+    // 目标没装时，下面这些方法体生效 —— 也就是"正常分支"：判据为假、注册静默忽略、解绑返回 false。
+    public static bool IsReady => false;   // together 装了 → 被转发到我们那份（恒 true）
+    public static bool IsActive => false;
+    public static bool IsBound => false;
+    public static bool IsMember(Player? player) => false;
+    public static IReadOnlyList<Player> Members => [];
+    public static Player? Counterpart(Player? player) => null;
+
+    public static void RegisterPairRule(string name, Func<IRunState, IReadOnlyList<Player>?> select) { }
+    public static void RegisterPowerMirrorOverride(Type powerType, bool singleInstance) { }
+    public static void RegisterPetKeyRule(string name, Func<Creature, string?> keyOf,
+        Func<Creature, Player?>? ownerOf = null) { }
+    public static void RegisterPetPairing(string name, Func<Creature, Creature?> pairOf) { }
+    public static bool Unbind(string reason = "external") => false;
+}
+```
+
+用法就一句判据 + 正常调用（**注册类接口在 mod 初始化时调一次**，查询类接口随时可调）：
+
+```csharp
+if (TogetherInterop.IsReady)                          // 装了 together 才会是真的
+{
+    TogetherInterop.RegisterPairRule("my-mod:duo", runState => /* 选谁成组，两端算得一样 */ null);
+}
+
+// 战斗 / 事件里判断"这局是不是共享局"
+if (TogetherInterop.IsActive)
+{
+    var mate = TogetherInterop.Counterpart(myPlayer);  // 共享局里 = 另一个人的 Player
+}
+```
+
+想再加别的成员，照 §3 的表把签名抄进来、方法体写 `=> default;` 就行（记住：**只有一个 `ret`**）。
 
 ---
 
@@ -78,6 +158,7 @@ internal static class TogetherInterop
 
 | 成员 | 说明 |
 |---|---|
+| `IsReady` | 恒为 `true`（`ModId` / `Version` 同理是常量）—— **只给 interop 存根当"对方在不在"的判据**（见 §1.3）。判断"本局在不在共享"用 `IsActive`，别用它 |
 | `IsActive` | **总闸门**：本局真的在共享（联机 + 已配对）。判断"要不要为共享让路"就看它 |
 | `IsBound` | 是否已配对 —— **不看是否联机**。判断"有没有配对过"用它；判断战场行为用 `IsActive` |
 | `IsMember(Player?)` | 某玩家是不是合作组成员（含锚点） |
@@ -89,9 +170,10 @@ internal static class TogetherInterop
 
 | 成员 | 说明 |
 |---|---|
-| `RegisterPairRule(name, select)` | **谁该成组**。`Arm()` 里按注册顺序问：返回非空列表即生效；返回 `null`/空表示"本条不管"，全部不管则回落"选人界面按下「加入合作模式」按钮的名单"。单条规则抛异常只跳过它自己 |
+| `RegisterPairRule(name, select)` | **谁该成组**。`Arm()` 里按注册顺序问：返回非空列表即生效；返回 `null`/空表示"本条不管"，全部不管则回落"本局名单槽位"（玩家在选人界面按「加入合作模式」投的票，主机汇总后随 run snapshot 下发）。单条规则抛异常只跳过它自己 |
 | `Unbind(reason = "external")` | **本局解除绑定**：立刻停掉共享、把共享主卡组按 1-based 奇偶拆给两人（奇数→锚点、偶数→回声）、把合作模式开关置 false 并广播；**本局内不再自动重新配对**（新开一局复位）。本来就未绑定返回 `false` |
 | `RegisterPowerMirrorOverride(Type, PowerMirrorPolicy)` | **能力镜像策略**：默认所有能力都镜像；你的能力语义上不能复制时声明 `SingleInstance` |
+| `RegisterPowerMirrorOverride(Type, bool singleInstance)` | 同上，**跨 mod 联动专用重载**（存根不用认识我们的枚举）：`false` = 每人一份（默认），`true` = 只留一份 |
 | `RegisterPetKeyRule(name, keyOf, ownerOf?)` | **召唤物配对**：怎么认出"这是同一只"（默认按 Monster ID + 同种序号，本体 pet 不用注册） |
 | `RegisterPetPairing(name, pairOf)` | 完全自己决定召唤物配对（优先级最高） |
 
@@ -136,7 +218,7 @@ TogetherInterop.RegisterPairRule("MyMod:two-distinct", runState =>
 ```
 
 要点：**只读**、**不抛**（抛了只会废掉你这条规则，会记 warning）、**顺序照抄 `Players`**。
-规则算出的名单会被 together 自己广播给两端，你不需要实现同步。
+规则算出的名单由 together 自己负责两端一致（写入本局名单槽位 / 由 `Arm` 两端各自算出同一答案），你不需要实现同步。
 
 ### 4.3 进 PVP 决斗时解绑
 
@@ -250,6 +332,7 @@ if (chk != 0) Logger.Info($"chk={chk} my_state hand={hand} draw={draw}");
 
 | 版本 | 日期 | 变更 |
 |---|---|---|
+| **未发布** | 2026-09-25 | ① 新增 `RegisterPowerMirrorOverride(Type, bool singleInstance)` —— 跨 mod 联动重载（原来的枚举重载在 `[ModInterop]` / `[AssemblyInterop]` 存根里用不了，见 §1.2 的"interop 友好度"表）。② 新增 `IsReady`（恒 `true`）—— 给存根当"对方在不在"的判据。③ 文档补 §1.3 可直接抄的存根模板。均向后兼容；发布时并进下一个版本号 |
 | **0.3.1** | 2026-09-24 | ① **新增 `Checkpoint(tag, data = "")`**：打对账点（生成一次校验和 → 输出 `[sync] chk=<id> ctx=… tag=together.state …` → 返回 id；非联机返回 0）。同期 together 侧：**自检默认在共享局开启**（`TOGETHER_SELFCHECK` 仍可 `1`/`0` 强制），所有自带诊断行自动加 `chk=<当前号>` 前缀 —— 于是两端日志可以直接按 `chk` 分组对照。用 `Checkpoint` 时**两端调用次数必须一致**。② **选人界面改版（合作模式）**：按钮文案改为「加入合作模式」/「退出合作模式」（无悬浮人数分数），按下 = 登记 + 让本体走一遍"确认准备"（内部反射调 `NCharacterSelectScreen.OnEmbarkPressed`，退出走 `OnUnreadyPressed`）；**删除起程门控与人数上限**（谁都能加入、≥2 人自成组、只有 1 人加入时按普通联机打），官方确认键不再被本 mod 触碰。`GroupSize` 连同设置项一起退役为历史字段（接口保留，行为不变） |
 | **0.3.0** | 2026-09-24 | **首次发布对外 API 说明**。新增三组接口：`RegisterPairRule`（配对规则）、`IsBound` / `Unbind`（解绑）、`SymbiosisEnabled` / `GroupSize` / `MergeStarterDecks` / `HpBonusPercent` / `ShareGold`（设置只读）。同时把此前已在 `TogetherApi` 上的成员一并纳入正式承诺：`IsActive` / `IsMember` / `Anchor` / `Members` / `OthersOf` / `Counterpart` / `OtherBody` / `PetCounterpart` / `IsSharedOrbQueue` / `SharedOrbQueueOwner` / `IsMirroredPower` / `RegisterPowerMirrorOverride` / `RegisterPetKeyRule` / `RegisterPetPairing` / `PileFingerprint` |
 | （模板） | yyyy-mm-dd | 新增 `xxx`；**破坏性**：`yyy` 由 `a` 改成 `b`（调用方需要改这里）；废弃 `zzz`（改用 …） |

@@ -1,16 +1,15 @@
-using System.Reflection;
+﻿using System.Reflection;
 
 using HarmonyLib;
 using MegaCrit.Sts2.Core.Logging;
 using MegaCrit.Sts2.Core.Modding;
 using STS2RitsuLib.Interop;
 using STS2RitsuLib;
-using Together.Core.Content;
-using Together.Core.Patches.Deck;
+using Together.Core.Foundation;
 using Together.Core.Settings;
+using Together.Core.Shared.Deck;
 
 namespace Together;
-
     /// <summary>Mod 入口。</summary>
     /// <remarks>
     /// 这里只做三件事：建 logger、把本程序集交给 RitsuLib 做自动注册、装 Harmony 补丁。
@@ -34,6 +33,18 @@ namespace Together;
         {
             var assembly = Assembly.GetExecutingAssembly();
             Logger = RitsuLibFramework.CreateLogger(ModId);
+
+            // 两台机器装的是不同版本时，名单走的是**两套不同机制**（甚至互相看不见对方的投票），
+            // 表现就是"按了「加入合作模式」却不成组"。这里把加载来源打出来，第一屏就能判断。
+            var assemblyPath = assembly.Location ?? string.Empty;
+            Logger.Info($"[together] 程序集加载自 {assemblyPath}");
+            if (assemblyPath.Contains("workshop", StringComparison.OrdinalIgnoreCase))
+            {
+                Logger.Warn(
+                    "[together] ⚠ 本次从 Steam 工坊加载。联机双方必须用【同一版本】的 together，"
+                    + "否则名单无法互通（表现：按了「加入合作模式」但不成组）。自测时建议统一用 mods\\together 下的本地版本。");
+            }
+
             RitsuLibFramework.EnsureGodotScriptsRegistered(assembly, Logger);
             ModTypeDiscoveryHub.RegisterModAssembly(ModId, assembly);
 
@@ -41,13 +52,19 @@ namespace Together;
             TogetherSettingsStore.Initialize();
             TogetherSettingsSync.Initialize();
             TogetherModSettingsPage.Register();
-            SymbiosisMembers.Initialize();
+
+            // 合作名单的槽位要在大厅界面出现之前注册好（RitsuLib 的 RunSavedData / 大厅暂存）。
+            CoopLobbyData.Register();
 
             ApplyPatches(assembly);
 
             // 通用兼容层：放行"任何自己重写了'同批 owner 必须一致'校验的 mod"。
             // 判据是方法 IL 里有没有那条错误信息，不看 mod 名字 —— 见 SameOwnerCheckCompat。
             SameOwnerCheckCompat.Apply(Patcher, "init");
+
+            // 可选联动：随机数预测（RandomForeseer）。等它真的加载了才挂，
+            // 所以这里只是"登记 + 试挂一次"，对方没装就什么都不发生。
+            Together.Core.Integrations.RandomForeseer.RandomForeseerInstaller.Install(Patcher, assembly);
         }
 
         /// <summary>逐个补丁类安装，失败只废掉那一个类。</summary>
@@ -67,6 +84,13 @@ namespace Together;
 
             foreach (var type in assembly.GetTypes())
             {
+                // 带类别的补丁（[HarmonyPatchCategory]）由各自的安装器按时机挂，不在这里装 ——
+                // 典型是"对方 mod 加载后才挂"的联动补丁（见 Core/Integrations/）。
+                if (type.GetCustomAttributes(typeof(HarmonyPatchCategory), true).Length > 0)
+                {
+                    continue;
+                }
+
                 if (type.GetCustomAttributes(typeof(HarmonyPatch), true).Length == 0)
                 {
                     continue;

@@ -1,10 +1,15 @@
-using STS2RitsuLib.Utils.Persistence;
+﻿using STS2RitsuLib.Utils.Persistence;
 using STS2RitsuLib;
-using Together.Core.Combat;
+using Together.Core.Alignment;
+using Together.Core.Foundation;
+using Together.Core.Shared.Body;
+using Together.Core.Shared.Gold;
+using Together.Core.Shared.Orb;
+using Together.Core.Shared.Pet;
+using Together.Core.Shared.Power;
 using Together;
 
 namespace Together.Core.Settings;
-
 /// <summary>
 /// 设置的持久化入口（RitsuLib 数据存储）。
 /// </summary>
@@ -81,6 +86,105 @@ internal static class TogetherSettingsStore
     public static int GroupSize => TogetherPair.MaxMembers;
 
     /// <summary>本机设置里的"是否共享金币"。</summary>
+    /// <summary>兼容性开关：牌序全序化（关掉 = 用本体比较器）。</summary>
+    public static bool CompatDeterministicOrder
+    {
+        get
+        {
+            Initialize();
+            var settings = RitsuLibFramework.GetDataStore(Const.ModId).Get<TogetherSettings>(DataKey);
+            return settings is null || settings.CompatDeterministicOrder;
+        }
+    }
+
+    /// <summary>兼容性开关：钩子监听表去重。</summary>
+    public static bool CompatHookDedupe
+    {
+        get
+        {
+            Initialize();
+            var settings = RitsuLibFramework.GetDataStore(Const.ModId).Get<TogetherSettings>(DataKey);
+            return settings is null || settings.CompatHookDedupe;
+        }
+    }
+
+    /// <summary>兼容性开关：钩子派发组内放宽。</summary>
+    public static bool CompatHookWiden
+    {
+        get
+        {
+            Initialize();
+            var settings = RitsuLibFramework.GetDataStore(Const.ModId).Get<TogetherSettings>(DataKey);
+            return settings is null || settings.CompatHookWiden;
+        }
+    }
+
+    /// <summary>兼容性开关：回声共享卡牌视图置空。</summary>
+    public static bool CompatSharedCardView
+    {
+        get
+        {
+            Initialize();
+            var settings = RitsuLibFramework.GetDataStore(Const.ModId).Get<TogetherSettings>(DataKey);
+            return settings is null || settings.CompatSharedCardView;
+        }
+    }
+
+    /// <summary>兼容性开关：回声不重复填充战斗牌堆。</summary>
+    public static bool CompatEchoPopulateSkip
+    {
+        get
+        {
+            Initialize();
+            var settings = RitsuLibFramework.GetDataStore(Const.ModId).Get<TogetherSettings>(DataKey);
+            return settings is null || settings.CompatEchoPopulateSkip;
+        }
+    }
+
+    /// <summary>兼容性开关：镜像副本的回合末能力只由原件结算一次。</summary>
+    public static bool CompatMirroredPowerSingleFire
+    {
+        get
+        {
+            Initialize();
+            var settings = RitsuLibFramework.GetDataStore(Const.ModId).Get<TogetherSettings>(DataKey);
+            return settings is null || settings.CompatMirroredPowerSingleFire;
+        }
+    }
+
+    /// <summary>兼容性开关：注能每场战斗只自动打出一次。</summary>
+    public static bool CompatImbuedOnce
+    {
+        get
+        {
+            Initialize();
+            var settings = RitsuLibFramework.GetDataStore(Const.ModId).Get<TogetherSettings>(DataKey);
+            return settings is null || settings.CompatImbuedOnce;
+        }
+    }
+
+    /// <summary>兼容性开关：随机数预测（RandomForeseer）联动。</summary>
+    public static bool CompatRandomForeseerSync
+    {
+        get
+        {
+            Initialize();
+            var settings = RitsuLibFramework.GetDataStore(Const.ModId).Get<TogetherSettings>(DataKey);
+            return settings is null || settings.CompatRandomForeseerSync;
+        }
+    }
+
+    /// <summary>本机设置里的"共享球位上限口径"。</summary>
+    public static OrbCapMode OrbCap
+    {
+        get
+        {
+            Initialize();
+            var settings = RitsuLibFramework.GetDataStore(Const.ModId).Get<TogetherSettings>(DataKey);
+            return settings?.OrbCap ?? OrbCapMode.Auto;
+        }
+    }
+
     public static bool ShareGold
     {
         get

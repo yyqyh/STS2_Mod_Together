@@ -15,29 +15,46 @@
 
 ## 1. 分层总览
 
+**目录 = 层，子目录 = 模块**：一个模块 = 一个目录 + 一个命名空间 + 它的补丁类，看一眼路径就知道这段代码在哪一层、属于哪个模块。
+
 ```
-                    ┌──────────────────────────────────────────────┐
-   公共面           │  Core/Api/TogetherApi.cs（唯一 public 依赖面） │
-                    └──────────────────────────────────────────────┘
-                                      ▲
-   L3 兼容层          SameOwnerCheckCompat / 结构判据 / 牌堆顺序让位
-                                      ▲
-   L2 规则收口        归属 · 事件份数 · 顺序与随机 · 界面同步 · 事件流程
-                                      ▲
-   L1 共享域          身体 · 牌堆 · 能力(power) · 球位 · 召唤物 · 金币
-                                      ▲
-   L0 底座            谁是成员 · 总闸门 · 设置 · 日志/自检
+  公共面    Core/Api/            TogetherApi —— 唯一 public 依赖面
+  L4 诊断   Core/Diagnostics/    取证与自愈（可整体删）
+  L2 对齐   Core/Alignment/      让两端算出同一个答案
+  L1 共享   Core/Shared/         把"每人一份"变成"共用一份"（按共享对象分子模块）
+              ├── Deck/  牌堆    ├── Body/  身体    ├── Power/ 能力（含副本内核）
+              ├── Orb/   球位    ├── Pet/   召唤物  └── Gold/  金币
+  L0 底座   Core/Foundation/     谁是成员 · 总闸门 · 选人阶段查询
+            Core/Settings/       设置（模型 / 存储 / 同步 / 设置页）
+            Core/Ui/             选人界面按钮 + 界面文本
+  通用设施  Core/Common/         反射小工具 / creature 扩展（不懂业务）
 ```
 
-| 层 | 职责（一句话） | 代表类型 | 目录 |
+**依赖方向只允许向下**（同层之间可以平级互调，`Common` / `Diagnostics` 谁都能用）：
+
+```
+Core/Api ────────► 任意层
+Core/Ui ─────────► Foundation ─┐
+Core/Alignment ──► Shared.* ───┼─► Common / Diagnostics（叶层，不反向引用任何业务层）
+Core/Shared.* ───► Foundation ─┘
+Core/Foundation ► Settings
+```
+
+| 层 | 职责（一句话） | 代表类型 | 目录 → 命名空间 |
 |---|---|---|---|
-| **L0 底座** | 决定"这局是不是共享局、谁是成员"，并提供设置与日志 | `TogetherPair`、`SymbiosisMembers`、`TogetherCoopGate`、`TogetherSettings*`、`CappedLog`/`SelfCheck` | `Core/Combat/Together/TogetherPair.cs`、`Core/Content/`、`Core/Settings/`、`Core/Utils/` |
-| **L1 共享域** | 把"每人一份"的东西变成"共用一份" | `SharedPileImpl`、`BodyMirror`、`PowerMirror`、`PowerPayload`、`OrbSlotSharing`、`SummonMirror`、`GoldMirror` | `Core/Combat/Together/` |
-| **L2 规则收口** | 让两端**算出同一个答案**（归属 / 份数 / 顺序 / 界面） | `CardOwnershipImpl`、`HandReturnOwnership`、`HookListenerDedupe`、`MonsterMoveScope`、`DeterministicCardOrder`、`PileCountSync`、`EventFlow` | `Core/Patches/Together/`（+ 少量同目录） |
-| **L3 兼容层** | 与别的 mod 共存 | `SameOwnerCheckCompat`、`PowerMirror.PolicyOf` 的结构判据、`PileOrderProbe` | `Core/Patches/Together/Deck/SameOwnerCheckCompat.cs` 等 |
-| **L4 诊断层** | 取证与自愈（可整体删） | `RoomFlowDiag`+`HangWatchdog`、`SharedStateSelfCheck`、`CappedLog` 键 | `Core/Utils/` |
+| **L0 底座** | 决定"这局是不是共享局、谁是成员"，并提供设置与界面文本 | `TogetherPair`、`TogetherCoopGate`、`CoopLobbyData`、`TogetherSettings*`、`CharacterSelectPatches`、`TogetherUiText` | `Core/Foundation/`、`Core/Settings/`、`Core/Ui/` → `Together.Core.{Foundation,Settings,Ui}` |
+| **L1 共享域** | 把"每人一份"的东西变成"共用一份" —— **一个共享对象一个模块** | `SharedPileImpl`（Deck）、`BodyMirror`（Body）、`PowerMirror` + `PowerPayload`（Power）、`OrbSlotSharing`（Orb）、`SummonMirror`（Pet）、`GoldMirror`（Gold） | `Core/Shared/{Deck,Body,Power,Orb,Pet,Gold}/` → `Together.Core.Shared.*` |
+| **L2 规则收口** | 让两端**算出同一个答案**（归属 / 份数 / 顺序 / 界面 / 事件流程） | `CardOwnershipImpl`、`HandReturnOwnership`、`HookListenerDedupe`、`MonsterMoveScope`、`ExtraTurnPolicy`、`EventFlow` | `Core/Alignment/` → `Together.Core.Alignment` |
+| **L3 兼容层** | 与别的 mod 共存（**不单独占目录**，跟着它服务的模块走） | `SameOwnerCheckCompat`（Deck）、`PowerMirror.PolicyOf` 的结构判据（Power） | `Core/Shared/Deck/`、`Core/Shared/Power/` |
+| **L4 诊断层** | 取证与自愈（可整体删） | `RoomFlowDiag` + `HangWatchdog`、`SharedStateSelfCheck`、`CappedLog` | `Core/Diagnostics/` → `Together.Core.Diagnostics` |
+| **通用设施** | 不懂业务的小工具 | `ModelAccess`、`CreaturePartnerExtensions` | `Core/Common/` → `Together.Core.Common` |
 
-**依赖方向**：L1→L0，L2→L1/L0，L3→L2，公共面→任意层。**反向依赖不允许**（补丁层不定义内核类型）。
+**模块化约定**（加新功能照这四条走）：
+
+1. **内核 + 它的补丁类放同一个模块目录**：不再有"内核在 A 目录、补丁在 B 目录"的分裂（这也是这次重构的主要收益 —— 以前 `Combat/Together/` 混着 L0/L1/L2，`Patches/Together/` 混着 L0/L2）。
+2. **跨模块只调对方的入口类型**（`BodyMirror.OnXxx`、`GoldMirror.OnArm` 这种），不互相改内部状态；模块内部成员一律 `private`。
+3. **新增/移动补丁类不用改 `Main.cs`**：`Main.ApplyPatches` 是扫全程序集的 `[HarmonyPatch]` 逐类安装，所以搬迁只影响 `namespace` 与 `using`。
+4. **唯一 public 面是 `TogetherApi`**：模块之间用 `internal`，对外必须过它；`Common` / `Diagnostics` 不得反向引用业务层。
 
 ---
 
@@ -50,8 +67,8 @@
 | **锚点 / 回声**（`TogetherPair`） | 锚点 = `RunState.Players` 顺序里最靠前的成员，权威实例（主卡组 + 四口战斗牌堆）挂在它身上；其余是回声，访问入口重定向到锚点，但**手牌与能量独立**。锚点由 `Players` 顺序决定 —— 两端天然一致、且写进存档，**不能用本机视角（`LocalContext`）判**，否则第一次抽牌就分叉 |
 | **总闸门** `TogetherPair.IsActive` | = 已配对 **且** 联机。镜像 / 球位 / 召唤物 / 金币 / 事件保护……全部只看它。带"联机"这一条是必须的：配对按设计"非共生体局不清空"，单人局里可能残留上一局的配对 |
 | **激活时机** `Arm` | 必须**晚于** `RunState` 构造（`CreateShared` 会遍历牌组给每张卡设 owner，提前激活会让 p2 读到被重定向的卡组 → "同一张牌设两次 owner" → 开局黑屏）。入口：`RunStateReadyPatch`（新局 / 读档两条） |
-| **成员名单** | 选人界面按「加入合作模式」→ `SymbiosisMembers`（主机权威 + sidecar 同步，**无名额限制**）；进局后由 `RunMembersSync` 广播"本局成员"，供草蜢等判据用（它不能依赖选人界面那份，读档/重连时是空的） |
-| **成员来源（可外部接管）** | `Arm()` 里先问外部注册的**配对规则**（`TogetherApi.RegisterPairRule`），都没有结果才回落"选人界面按了「加入合作模式」的名单"；规则算出的名单同样会被 `RunMembersSync` 广播，所以规则只要"两端各自算得一样"即可 |
+| **成员名单**（`CoopLobbyData`） | 选人界面按「加入合作模式」= 写**自己那一票**（RitsuLib `RunSavedData` 的 per-player 槽位 `coop_vote`）；主机在 `RunSavedDataLobbyStagingEvent` 里汇总成全局槽位 `coop_roster`。**名单随 run snapshot 下发**，所以开局时两端读的是同一份数据（不再有"一端收到广播一端没收到"） |
+| **成员来源（可外部接管）** | `Arm()` 里先问外部注册的**配对规则**（`TogetherApi.RegisterPairRule`），都没有结果才用本局名单槽位里的 netId 与 `RunState.Players` 求交集；规则只要"两端各自算得一样"即可 |
 | **解绑（外部 mod 入口）** | `TogetherApi.Unbind(reason)`：关开关 + 清成员名单并广播 + 置"本局不再自动配对"标记 + 把共享主卡组按 **1-based 奇偶**（奇数→锚点、偶数→回声）拆回两人；新开一局复位。超过 2 人只还原各自卡组 + warning |
 | **设置** | `TogetherSettings`（持久化）/ `TogetherSettingsStore`（读写）/ `TogetherSettingsSync`（**联机以主机为准**，sidecar 发布订阅）/ `TogetherModSettingsPage`（设置页）。所有读取都走 `Effective*` 属性，不直接读 Store |
 
@@ -79,7 +96,8 @@
 | **重放** | **关系型**副本补跑一次 `AfterApplied`（异步、失败只记日志、期间屏蔽镜像）；`BeforeApplied` **不重放** | 关系型的衍生施加被"无来源"判据挡住，只能副本自己建（拦截的 `CoveredPower→InterceptPower`）；非关系型的衍生本来就会被镜像机制送到两边，重放就是一边双份 |
 | **移除 / 层数** | 副本被移除时不联删另一份（资源类）；层数变化同步给"对应的第 N 份副本"（按类型 + 同类型内序号配对） | 资源类（下回合加费…）是一次的：一份被消耗不该把另一份删掉，否则"先开始回合的人把收益拿走" |
 
-**配套的"第二命中"机制**：本体对多目标效果是"逐个目标 Apply / 逐个加层"，共享身体下会算成两遍 → `PowerSecondHitModifyAmountPatch` + `PowerSecondHitApplyPatch` 用"同类型 + 同施加者 + 同层数 + 时间窗 + 目标没被这次效果命中过"来识别并忽略第二次。
+**配套的"第二命中"机制**：本体对多目标效果是"逐个目标 Apply / 逐个加层"，共享身体下会算成两遍 → `PowerSecondHitModifyAmountPatch` + `PowerSecondHitApplyPatch` 用"**同一个 choiceContext** + 同类型 + 同施加者 + 同层数 + 目标没被这次效果命中过"来识别并忽略第二次（拿不到 context 的路径退回时间窗）。
+**但它只对"会镜像"的能力生效**（`PolicyOf == Mirror`）。怪物施加的能力按 `PolicyOf` 是 `SingleInstance`、不镜像——撤销目标折叠后本体怪招本来就逐玩家各施加一次，共享身体下这就是"每人各一份"，再吞第二次就会把回声那份抹掉（实测：`powers=[SHRINK_POWER=-1]` 只有锚点有）。
 
 ### L2 规则收口
 
@@ -113,12 +131,63 @@
 
 ---
 
-## 3. 补丁清单（59 个 `[HarmonyPatch]` 类）
+## 3. 补丁清单（60 个 `[HarmonyPatch]` 类）
+
+### 3.9 兼容性代价：哪些补丁改的是**本体行为**（重点看这一张表）
+
+把补丁分成两类看，**兼容性风险只集中在 B 类**：
+
+| 类别 | 含义 | 代表补丁 | 对别的 mod 的影响 |
+|---|---|---|---|
+| **A 只搬运共享数据** | 只在自己这套"共享一份"的数据之间读写：重定向、镜像、计数同步、UI 刷新、我们自己的 run 数据槽位 | `CombatPileRedirectPatch`、`DeckRedirectPatch`、`BodyStatMirrorPatch`、`PowerMirrorPatches`、`GoldMirrorPatch`、`OrbSlotSharing` 系列、`PetSummonFanoutPatch`、`PileCount*`、`CharacterSelect*`、`Host*/ClientReset*`、`SharedDeckOwnerNormalizePatch`、`SharedHookOwnerWidenPatch` | 低：这些路径别的 mod 基本不碰，且只在"共享局"里生效（`TogetherPair.IsActive` 门槛） |
+| **B 改本体行为** | 改的是**本体自己的逻辑/数据视图/校验/常量**，而**别的 mod 也会走这些路径** | 见下表 | 高：需要按顺序逐个评估 |
+
+| 补丁 | 改了什么 | 兼容性风险 |
+|---|---|---|
+| `DifferentOwnersCheckPatch` | transpiler 打掉"同批 owner 必须一致"那条**校验异常** | 高：任何依赖该异常或自己复刻了它的 mod（已由 `SameOwnerCheckCompat` 统一放行）；**它没装上时抽牌/打牌全废**（实测） |
+| `HookListenerDedupePatches` | 改 `IterateHookListeners` 的**返回集合** —— 但只丢掉"同一张**牌**（及其附魔/灾祸）被枚举两次"的那一份 | 低中：遗物 / 能力 / 别的 mod 的模型原样保留、原顺序（早先那版是整表按引用去重，会吞掉"靠重复监听者实现两次效果"的 mod） |
+| `SharedHookOwnerWidenPatch` | **接管** `Hook.AfterCardChangedPiles`（两轮）的派发，但只在"牌进主卡组"时；放宽逻辑走 `OwnerClaim` 的**逐监听者**视角切换（只给"方法体里读了 `card.Owner`"的监听者换成"自己的牌"，其余原样跑一次） | 中：所有遗物/能力的"牌换堆"通知都走这里，但换视角只针对读 owner 的那些；关掉 `CompatHookWiden` 即回原版派发 |
+| `SharedStateSelfCheck` 的 `ChecksumSelfCheckPatch` | 只读（打点） | 低 |
+| `MonsterMoveScope.SharedCardViewScopePatch` | 让回声的 `PlayerCombatState.AllCards` 返回空 | 中：任何读 `AllCards` 做统计的 mod（只在怪招期间 + 只在回声侧） |
+| `DeterministicCardComparePatch` | 让 `CardModel.CompareTo` 成为**全序** | 中：所有排序/洗牌路径都受影响（本体自己的 `List.Sort` 排的是副本） |
+| `ImbuedOncePerCombatPatch` / `MirroredPowerSingleFirePatch` | **跳过**本体的自动打出 / 回合末结算（前缀返回 false + 自己把 Task 还回去） | 中：改的是本体阶段执行；两条都带独立开关。~~`ExtraTurnPolicyPatches`~~ 已删：它拦的 `ClearBlock` 是本体正常行为；~~`AutoPrePlayOncePerGroupPatch`~~ 已删：**跳过回声那次 pre-play 派发会分叉**（牌的 owner 两端会漂，见下） |
+| `PowerSecondHitApplyPatch` / `PowerSecondHitModifyAmountPatch` | 把"同一效果的第二次命中"整个忽略（判据 = 同一个 `choiceContext`） | 中：改本体结算 |
+| `EnchantApplyGuardPatch` / `RemoveFromDeckGuardPatch` / `TransformGuardPatch` | 把"已失效的选择"**过滤掉**而不是抛异常 —— 但**只对属于共享卡组的牌**（`SharedDeckRegistry` 判），不是共享卡的照本体抛异常 | 低中：改本体的错误路径（收益是共享局的并发事件不再卡死；别的 mod 拿异常当控制流的逻辑不受影响） |
+| `CardPileLookupPatch` | `CardModel.get_Pile` 找不到时**先查我们的入/出堆索引**，索引没有才去另一半的堆再找 | 中：改本体查询语义 |
+| `OrbAddSlotsCapPatch` | 球位上限 10 → 按设置口径（默认 10 × 有球位成员数；可切"原版 10 / 10 × 全部人数"） | 低中：只改常量上限 |
+| `AscensionBaneDedupePatch` | 共享卡组下"进阶之灾"**去重**（只摘回声那次调用新加的那张） | 低 |
+| `ThieveryMoveTargetsPatch` / `StealCardFacePatch` / `StealReturnTargetPatch` | 只改草蜢偷牌的**被偷方**与**卡面归属**（不再动 `targets`，也不碰任何公共路径） | 低：只在这只怪上 |
+| `PopulateCombatStateAnchorOnlyPatch` | 只让锚点填充战斗状态（带兼容开关，关掉 = 回声也填） | 中：改本体初始化 |
+| `SameOwnerCheckCompat`（无特性，运行时动态装） | 扫 IL 放行**第三方 mod 自己复刻的**同 owner 校验 | 中：改的是别的 mod 的校验 |
+
+**结论**：真正"降低兼容性"的是 **B 类里那几条公共路径**（owner 校验、监听表、钩子派发、AllCards 视图、CompareTo 全序）——它们都不是"只影响我们"的补丁。**要提兼容性，优先把这几条收窄成"只在共享局 + 只在必要时生效"**（现在都已经带 `TogetherPair.IsActive` 门槛，但钩子派发那条是全量接管，值得再评估）。
+
+**可逐条回退的开关**（设置页「兼容性（高风险补丁）」节，默认全开，以主机为准）：`CompatDeterministicOrder`、`CompatHookDedupe`、`CompatHookWiden`、`CompatSharedCardView`、`CompatEchoPopulateSkip`、`CompatMirroredPowerSingleFire`、`CompatImbuedOnce`、`CompatRandomForeseerSync`；另有 `OrbCapMode`（球位上限口径：`Auto` / `Vanilla` / `PerMember`）。
+
+#### 3.9.1 兼容性说明（给对方 mod 作者 / 排障用）
+
+**一句话**：本 mod 只在 `TogetherPair.IsActive`（本局真的成组了）时才介入；**单人局与普通联机局一律不碰**（那些补丁在这个前提下是空操作）。所有"改本体行为"的补丁都能逐条关掉回退，联机以主机设置为准。
+
+| 关心的点 | 现状 | 会不会影响别的 mod |
+|---|---|---|
+| owner 校验（`different owners`） | `DifferentOwnersCheckPatch` 打掉本体那条校验；`SameOwnerCheckCompat` 还会扫 IL 放行**第三方 mod 自己复刻的**同一条校验（按程序集 MVID 缓存） | 只有"依赖这条校验抛异常来中止流程"的代码会受影响；我们同时提供了通用放行层，不会让别的 mod 白炸 |
+| 钩子监听表 | 只丢"同一张**牌**（及其附魔/灾祸）被枚举两次"的那一份；遗物 / 能力 / 别的 mod 的模型**原样保留、原顺序** | 低：早先"整表按引用去重"那版会吞掉"靠重复监听者实现两次效果"的 mod，已收窄 |
+| 钩子派发（8 个"牌事件"钩子） | `OwnerClaim` 逐个监听者调用；**只有**方法体里读了 `card.Owner` 的才临时看到"自己的牌"，其余原样跑一次 | 中：读 owner 的第三方遗物/能力会从"只认自己那张牌"变成"组内每张共享牌都认"，这是**刻意的组内放宽**；关 `CompatHookWiden` 即回原版 |
+| `CardModel.CompareTo` / `Pile` 视图 | 只在返回"相等"时补全序；只在怪招期间、只对回声侧把共享卡牌视图置空 | 低-中：都带开关（`CompatDeterministicOrder` / `CompatSharedCardView`） |
+| 事件里的"失效选择" | 三个 Guard 只过滤**属于共享卡组**的失效项（`SharedDeckRegistry` 判）；不属于共享卡组的照本体抛异常 | 低：别的 mod 拿异常当控制流的逻辑不受影响 |
+| 数值口径（会被玩家感觉到） | 镜像能力 = 两人各一份；"我的牌"判据放宽后，**每个成员的**遗物/能力都会对同一张共享牌响应一次（例如两人都有苦无 → 各加一次敏捷） | 这是"共用一副牌"的语义延伸，不属于 bug；不喜欢就关对应开关 |
+
+**本次整理（v0.3.2）清掉的东西**：`TogetherSettings.OpeningSetupSeeds` + `TogetherSettingsStore.Was/​MarkOpeningSetupDone(string)`（早先"按种子持久标记开局一次性操作"的路线，现已被 run 槽位的 `CoopLobbyData.*OpeningSetupDone` 取代，两处无调用）、`TogetherPair._pendingOpeningSetupSeed`（编译器报 CS0169 从未使用）、`ExtraTurnPolicyPatches` / `AutoPrePlayOncePerGroupPatch`（前面各自因为"拦的是本体正常行为" / "会让 owner 漂移那一端整张牌不打出"而删除）。
+
+> **别踩的坑（2026-09-25 实测）**：不要试图"从源头收口"共享组的自动预打阶段（跳过回声那次 `AfterAutoPrePlayPhaseEntered` 派发）。
+> 共享卡组里牌的 owner 两端会漂（同一张注能牌在一端归锚点、另一端归回声），而注能的判据是 `player == Card.Owner`
+> —— 一旦回声那次被整段跳过，owner 落在回声那一端的机器就整张牌都不会自动打出 → **checksum #4 分叉**
+> （一端 Draw 10 张、另一端 9 张，客户端多 8 点格挡）。正确做法是按<b>牌对象</b>去重（`ImbuedOncePerCombatPatch`）。
 
 > 安装方式：`Main.ApplyPatches` **逐类安装**（不用 `Harmony.PatchAll`）—— 单类失败只废它自己，
 > 否则 `Initialize` 抛异常会让整个 mod 初始化失败（而且 PatchAll 不是事务性的，会留下"一半功能正常"的状态）。
 
-### L0 底座（`Core/Patches/Together/`、`Core/Settings/`、`Core/Content/`）
+### L0 底座（`Core/Foundation/`、`Core/Settings/`、`Core/Ui/`）
 
 | 类 | 挂点 | 作用 |
 |---|---|---|
@@ -128,21 +197,21 @@
 | `RoomFlowDiagPatches` | 房间里程碑 8 个方法 | 只看不改的日志 + 两处拉起看门狗 |
 | `ChecksumSelfCheckPatch` | `ChecksumTracker.GenerateChecksum` | 校验和前的自检输出 |
 
-### L1 共享域（`Core/Combat/Together/`）
+### L1 共享域（`Core/Shared/{Deck,Body,Power,Orb,Pet,Gold}/`）
 
 | 类 | 挂点 | 作用 |
 |---|---|---|
 | `CombatPileRedirectPatch` / `DeckRedirectPatch` | 四口堆 getter / `Player.get_Deck` | 回声重定向到锚点 |
-| `PopulateCombatStateAnchorOnlyPatch` / `CombatStateCreatedPatch` | 进战斗填充 / `PlayerCombatState` 构造 | 只让锚点填充；建完状态后链接球位、拉平身体数值 |
+| `PopulateCombatStateAnchorOnlyPatch` / `CombatStateCreatedPatch` | 进战斗填充 / `PlayerCombatState` 构造 | 只让锚点填充（`CompatEchoPopulateSkip` 可回退）；建完状态后链接球位、拉平身体数值 |
 | `BodyStatMirrorPatch` | `set_Block`/`set_CurrentHp`/`set_MaxHp` | 共享身体 + 召唤物血量（召唤期间不推） |
 | `PowerMirrorPatches` | `ApplyPowerInternal`/`RemovePowerInternal`/`InvokePowerModified` | 能力镜像三个入口 |
-| `PowerSecondHitModifyAmountPatch` / `PowerSecondHitApplyPatch` | `PowerCmd.ModifyAmount` / `PowerCmd.Apply` | 同一效果的第二命中整个忽略 |
+| `PowerSecondHitModifyAmountPatch` / `PowerSecondHitApplyPatch` | `PowerCmd.ModifyAmount` / `PowerCmd.Apply` | 同一效果的第二命中整个忽略（同 `choiceContext` 才认作同一效果；记录按 context 分槽，互不覆盖；**只对 `PolicyOf == Mirror` 的能力**——怪物施加的不镜像，不能让这两个补丁吞掉回声那一份） |
 | `PowerApplySourceRecordPatch` | `PowerCmd.Apply` | 记下 `cardSource`，供"衍生施加不镜像"判据 |
-| `OrbRelinkOnTurnStartPatch` / `OrbVisualMirrorPatch` / `OrbAddSlotsCapPatch` / `OrbTurnHookDedupePatch` | 回合开始 / 球位界面 5 个方法 / `OrbCmd.AddSlots` / 球位两个回合钩子 | 球位共享的四个收口 + 激发动画保险 |
+| `OrbRelinkOnTurnStartPatch` / `OrbVisualMirrorPatch` / `OrbAddSlotsCapPatch` / `OrbTurnHookDedupePatch` | 回合开始 / 球位界面 5 个方法 / `OrbCmd.AddSlots` / 球位两个回合钩子 | 球位共享的四个收口 + 激发动画保险；上限口径读设置（`OrbCapMode`：Auto / Vanilla / PerMember） |
 | `PetSummonFanoutPatch` / `DieForYouSharedBodyPatch` | `OstyCmd.Summon` / `DieForYouPower.ModifyUnblockedDamageTarget` | 扇形召唤；召唤物替队友挡伤害 |
 | `GoldMirrorPatch` / `LoseGoldMirrorPatch` | `Player.Gold` setter / `PlayerCmd.LoseGold` | 钱包共享 |
 
-### L2 规则收口（`Core/Patches/Together/Deck/`、`.../Combat/`、`EventFlowPatches.cs`）
+### L2 规则收口（`Core/Alignment/`）
 
 | 类 | 挂点 | 作用 |
 |---|---|---|
@@ -151,27 +220,34 @@
 | `DifferentOwnersCheckPatch` | `CardPileCmd+<Add>d__N.MoveNext`（transpiler） | 打掉本体"同批 owner 必须一致"校验 |
 | `HandReturnPatches` | `CardPileCmd.Add` 三个重载 | "从共享堆回手"的落点/归属修正 |
 | `SelectedFromPilePatch` | `CardSelectCmd.FromCombatPile` | 记"谁从哪口堆选牌" |
-| `CardPileLookupPatch` | `CardModel.get_Pile` | 找不到时去另一半的堆里再找（安全网） |
+| `CardPileLookupPatch` | `CardModel.get_Pile` | 找不到时先查 `CardPileIndex`（`AddInternal`/`RemoveInternal` 维护的 O(1) 映射 + 复核），再退回"扫其他成员的堆"（安全网） |
 | `PileCountSyncOnChangePatch` / `PileCountBindPatch` / `PileCountUnbindPatch` | 入/出堆 + 牌堆按钮 Initialize/销毁 | 牌堆计数按真实张数写死 |
 | `AutoPlayFromDrawPileProbePatch` / `AnointedOrderProbePatch` / `AutoPlayDiagnosticPatch` | 自动打牌 / 受膏 / `CardCmd.AutoPlay` | 顺序指纹 + 诊断（不改顺序） |
 | `CardFactoryDistinctOrderPatch` | `CardFactory.GetDistinctForCombat` | 候选池副本排序（不碰牌堆） |
 | `DeterministicCardComparePatch` | `CardModel.CompareTo` | 全序（修 `StableShuffle` 族两端不一致） |
 | `InitialShuffleProbePatch` | `CardPile.RandomizeOrderInternal` | 初始洗牌后打指纹（不排序） |
-| `AscensionBaneDedupePatch` | `AscensionManager.ApplyEffectsTo` | 共享卡组下"进阶之灾"去重 |
-| `HookListenerDedupePatches` | `CombatState`/`RunState.IterateHookListeners` | 监听表按引用去重 |
+| `AscensionBaneDedupePatch` | `AscensionManager.ApplyEffectsTo`（Prefix+Postfix） | 调用前后作差，只摘回声那次调用新加的"进阶之灾"；读档兜底仍走 `DedupeSharedDeck` |
+| `OwnerClaim` 系列（`SharedCardExhausted` / `SharedCardDiscarded` / `SharedCardPlayed` / `SharedCardDrawn` / `SharedCardGenerated` / `SharedBeforeCardRemoved` / `SharedDamageReceived` 七个 `*OwnerWidenPatch`） | `Hook.AfterCardExhausted` / `AfterCardDiscarded` / `AfterCardPlayed`（两轮）/ `AfterCardDrawn`（两轮）/ `AfterCardGeneratedForCombat` / `BeforeCardRemoved` / `AfterDamageReceived`（两轮，判据是 `cardSource.Owner`） | 「我的牌」判据的组内放宽：**逐监听者**调用，只有"方法体里读了 `card.Owner`"的才临时看到"自己的牌"；不读 owner 的（成就、鼓、午夜这类）原样不动、不会被重复触发。**判据要扫 async 状态机**：本体钩子多是 `async Task`，方法自己只剩"建状态机 + Start"，必须取 `AsyncStateMachineAttribute.StateMachineType.MoveNext` 再扫 `CardModel.get_Owner`（只扫外层会一个都扫不到——实测 `owner.widen` 全是 0）。监听者来源、Push/Pop、收尾顺序都照抄本体各自那一份（伤害钩子是"先 PopModel 再 InvokeExecutionFinished"）。全部挂在 `CompatHookWiden` 开关下 |
+| `HookListenerDedupePatches` | `CombatState`/`RunState.IterateHookListeners` | 只去掉"同一张牌（及其附魔/灾祸）被枚举两次"的重复，其余监听者原样保留 |
 | `MonsterMoveScopePatch` / `SharedCardViewScopePatch` | `MonsterModel.PerformMove` / `PlayerCombatState.get_AllCards` | 怪招期间共享卡牌只算一次 |
-| `ImbuedOncePerCombatPatch` | `Imbued.AfterAutoPrePlayPhaseEntered` | 注能每场战斗只自动打出一次 |
+| `ImbuedOncePerCombatPatch` | `Imbued.AfterAutoPrePlayPhaseEntered` | 注能每场战斗只自动打出一次（按**牌对象**去重；不能改成按玩家跳过派发，见 §3.9 的"别踩的坑"） |
 | `MirroredPowerSingleFirePatch` | 6 个回合末能力 | 会改身体数值的回合末能力只由原件结算一次 |
 | `GeneratedCardHandTargetPatch` | `CardPileCmd.AddGeneratedCardsToCombat` | 镜像副本产出的牌落到宿主手里 |
-| `ExtraTurnPolicyPatches` | `Creature.AfterTurnStart` / `ClearBlock` | 额外回合不清共享格挡（并避开本体 NRE） |
-| `DeckSelectionLifecyclePatch` / `DeckChangeRefreshPatch` / `EnchantApplyGuardPatch` / `RemoveFromDeckGuardPatch` / `TransformGuardPatch` / `EnchantSelectionPatches` / `PendingSelectorRegisterPatch` / `ChoiceSyncDiagPatch` | 事件与选牌流程 | 见 §2「事件流程」 |
-| `StealRecordPatch` / `StealReturnAllPatch` / `ThieveryMoveTargetsPatch` / `StealVictimApplyPatch` | 草蜢偷牌 4 处 | 多人各偷一张、被偷方显式指定 |
+（`ExtraTurnPolicyPatches` 已删：额外回合清格挡就是本体行为，和普通回合一致；当年那次卡死根因是"前缀返回 false 却没还 Task"。）
+| `DeckSelectionLifecyclePatch` / `DeckChangeRefreshPatch` / `EnchantApplyGuardPatch` / `RemoveFromDeckGuardPatch` / `TransformGuardPatch` / `EnchantSelectionPatches` / `PendingSelectorRegisterPatch` / `ChoiceSyncDiagPatch` | 事件与选牌流程 | 见 §2「事件流程」。三个 Guard 的判据是"失效项里**至少有一张登记在 `SharedDeckRegistry` 里**才过滤"（登记点：`SharedDeckOwnerNormalize` 重建遍历 + `SharedHookOwnerWiden` 的"牌进主卡组"通路） |
+| `ThieveryMoveTargetsPatch` / `StealCardFacePatch` / `StealReturnTargetPatch` | 草蜢 `ThieveryMove`（含派生怪）+ `SwipePower.Steal` / `SwipePower.BeforeDeath` | **不再改 `targets`**（本体传的就是全场玩家的 creature，本来每人各偷一张），也**不碰任何公共路径**；只负责"按本次怪招开一次轮转会话"+ **卡面归属**（记在本机头上、本体没画就补一张；记在别人头上、本体画了就摘掉 → 两端各看自己那张）+ 归还前用同一份映射钉 `Target`（`BeforeDeath` 是非 async 挂点，最可靠）。~~`StealRecordPatch` / `StealReturnAllPatch`~~ 已删：归还已交回本体，那两个只剩日志；~~`StealOwnerRetargetPatch`（挂 `CardPileCmd.RemoveFromCombat`，改牌 owner）~~ 被否：那是本体公共路径，兼容面太大 |
 
-### L3 兼容层
+### L3 兼容层（跟模块走：`Core/Shared/Deck/`、`Core/Shared/Power/`）
 
 | 类 | 说明 |
 |---|---|
 | `SameOwnerCheckCompat`（无 `[HarmonyPatch]`，运行时动态装） | 扫 IL 放行别的 mod 的 owner 校验 + MVID 跨启动缓存 |
+
+### L3 联动层（`Core/Integrations/`）
+
+| 模块 | 目标 | 说明 |
+|---|---|---|
+| `Core/Integrations/RandomForeseer/` | 「随机数预测」RandomForeseer | 它按**玩家**把战斗状态快照进自己的模拟器，而共享身体下同组成员的四口战斗堆是同一个实例、球位是同一口队列 → 会把同一副牌快照成两份（"抽牌预测连续都是第一张牌"）、把球队列算两遍（"充能球伤害预测不准"）。四个补丁收口：① `CombatPredictionSimulator` 构造时登记"本次预测"；② `SimPlayerCombatState` 构造后，把四口共享战斗堆 + 球队列写成本次预测**唯一**的那份副本；③ `SimOrbQueue.BeforeTurnEnd` 每份预测只触发一次；④ `CardPileUtils.TryGetDrawPileOwner` 在共享局里固定返回锚点（洗牌 RNG 流跟着锚点）。<br>**只按类型名/属性名查找、不猜私有字段名**（字段用 `<属性名>k__BackingField` 或"名字含属性名 + 类型匹配"来找），任何一项找不到就只跳过那一项并记 `rf.bridge` 日志 —— 最坏情况是"预测保持原样"，绝不影响对局。补丁类只带 `[HarmonyPatchCategory]`，由 `RandomForeseerInstaller` 在**对方加载后**才挂（对方没装 → 完全不参与）。开关：`CompatRandomForeseerSync`（默认开）。 |
 
 ---
 
@@ -245,7 +321,7 @@ CappedLog / Logger.Info(TogetherApi.PileFingerprint(pile.Cards));
 
 ---
 
-## 6. 目录结构（32 个 `.cs`）
+## 6. 目录结构（36 个 `.cs`）—— 按层 / 模块排列
 
 ```
 together/
@@ -253,24 +329,48 @@ together/
 ├── Const.cs                      ModId / 名称 / 版本 / 资源路径常量
 └── Core/
     ├── Api/TogetherApi.cs        ★ 对外接口（唯一 public 面）
-    ├── Combat/Together/
-    │   ├── TogetherPair.cs       L0 锚点/回声 + 总闸门 + Arm
-    │   ├── TogetherCoopGate.cs   L0 选人阶段查询（Applies / 谁已加入；无名额、无门控）
-    │   ├── TogetherMirrors.cs    L1 身体镜像 + 能力镜像内核（BodyMirror / PowerMirror）
-    │   ├── PowerPayload.cs       L1 能力内部数据 + 自身字段搬运
-    │   ├── PowerApplySource.cs   L1 "这次施加是卡还是能力衍生"
-    │   ├── OrbSlotSharing.cs     L1 球位共享 + 界面镜像
-    │   ├── Pets.cs               L1 召唤物配对 + 扇形召唤
-    │   ├── MonsterMoveScope.cs   L2 怪招作用域
-    │   └── ExtraTurnPolicy.cs    L2 额外回合策略
-    ├── Content/SymbiosisMembers.cs           L0 成员名单（主机权威 + sidecar）
-    ├── Patches/Together/
-    │   ├── CharacterSelectPatches.cs         L0 选人界面
-    │   ├── EventFlowPatches.cs               L2 事件与选牌流程
-    │   ├── Combat/{HookPatches,PowerPatches}.cs   L2 监听去重 / 注能 / 回合末 / 生成牌落点
-    │   └── Deck/{SharedPile,CardOwnership,PileView,RandomPick,SameOwnerCheckCompat,Steal}Patches.cs
-    ├── Settings/{TogetherSettings,TogetherSettingsStore,TogetherSettingsSync,TogetherModSettingsPage}.cs
-    └── Utils/{CappedLog,ModelAccess,DeterministicCardOrder,CreaturePartnerExtensions,RoomFlowDiag,SharedStateSelfCheck,TogetherUiText}.cs
+    ├── Integrations/             L3 联动层（默认不装：[HarmonyPatchCategory] 由安装器按对方的加载时机挂）
+    │   └── RandomForeseer/       随机数预测：共享牌堆 / 球位 / 冻眼抽牌堆主人
+    │
+    ├── Foundation/               L0 谁是成员 · 总闸门（一起改，别分开看）
+    │   ├── TogetherPair.cs           成员注册表 + IsActive 总闸门 + Arm + 解绑
+    │   ├── TogetherCoopGate.cs       选人阶段：这次开局要不要管合作（= 显不显示按钮）
+    │   └── CoopLobbyData.cs          合作名单 = RunSavedData 槽位（每人一票 + 主机汇总 → run snapshot）
+    ├── Settings/TogetherSettings.cs / TogetherSettingsStore.cs / TogetherSettingsSync.cs / TogetherModSettingsPage.cs
+    ├── Ui/                       L0/UI 玩家能看到的那两处
+    │   ├── CharacterSelectPatches.cs 选人界面「加入合作模式」按钮
+    │   └── TogetherUiText.cs         界面文本唯一出口（中/英，RitsuLib I18N）
+    │
+    ├── Shared/                   L1 共享域：一个共享对象一个模块
+    │   ├── Deck/                     牌堆共享 + 归属收口 + 偷牌 + 兼容层（7 个文件）
+    │   │   ├── SharedPilePatches.cs        四口堆 + 主卡组的重定向（SharedPileImpl）
+    │   │   ├── CardOwnershipPatches.cs     归属自然化 / 回手 / 同批 owner 校验转译
+    │   │   ├── PileViewPatches.cs          牌堆计数与视图
+    │   │   ├── RandomPickPatches.cs        随机取牌 / 顺序指纹（不重排牌堆）
+    │   │   ├── StealPatches.cs             草蜢偷牌（开/收轮转会话 + 被偷方改判；targets 与归还都交回本体）
+    │   │   ├── DeterministicCardOrder.cs   排序键 / 候选池副本 / 指纹
+    │   │   └── SameOwnerCheckCompat.cs     L3 兼容层：放行第三方 mod 的 owner 校验
+    │   ├── Body/BodyMirror.cs        血量 / 上限 / 格挡镜像
+    │   ├── Power/PowerMirror.cs      能力镜像内核 + 三个补丁 + 第二命中
+    │   ├── Power/PowerPayload.cs     能力内部数据 + 自身字段搬运
+    │   ├── Power/PowerApplySource.cs "这次施加是卡还是能力衍生"
+    │   ├── Orb/OrbSlotSharing.cs     球位共享 + 界面镜像
+    │   ├── Pet/Pets.cs               召唤物配对 + 扇形召唤
+    │   └── Gold/GoldMirror.cs        金币共享（含重建窗口的实例认领）
+    │
+    ├── Alignment/                L2 让两端算出同一个答案
+    │   ├── MonsterMoveScope.cs       怪招作用域（共享牌只算一次）
+    │   ├── HookPatches.cs            监听表去重 / 注能 / 回合末 / 生成牌落点
+    │   ├── PowerPatches.cs           能力相关的对齐补丁
+    │   └── EventFlowPatches.cs       事件与选牌流程
+    │
+    ├── Diagnostics/              L4 取证与自愈（可整体删）
+    │   ├── RoomFlowDiag.cs           房间里程碑 + 黑屏看门狗
+    │   ├── SharedStateSelfCheck.cs   两端状态对账（chk=）
+    │   └── CappedLog.cs              按 key 限流的日志
+    └── Common/                   通用设施（不懂业务）
+        ├── ModelAccess.cs            反射读字段 / 方法的缓存
+        └── CreaturePartnerExtensions.cs  队友 creature 的扩展方法
 ```
 
 界面文本（不进程序集）：`together/localization/mod_settings/{eng,zhs}.json` —— RitsuLib `I18N` 的扁平 `key → 文本`，

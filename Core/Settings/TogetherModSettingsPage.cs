@@ -1,22 +1,23 @@
-using System.Globalization;
+﻿using System.Globalization;
 
 using MegaCrit.Sts2.Core.Runs;
 using STS2RitsuLib.Settings;
 using STS2RitsuLib.Utils.Persistence;
 using STS2RitsuLib;
-using Together.Core.Content;
-using Together.Core.Utils;
+using Together.Core.Common;
+using Together.Core.Diagnostics;
+using Together.Core.Foundation;
+using Together.Core.Ui;
 using Together;
 
 namespace Together.Core.Settings;
-
 /// <summary>
 /// 设置界面：合作模式总开关 + 几个共享规则。
 /// </summary>
 /// <remarks>
 /// <para>
-/// "谁和谁配对"不在这里选——那是在多人选人界面按「加入合作模式」决定的（见
-/// <c>Together.Core.Multiplayer.SymbiosisMembers</c>），这样两个玩家可以选<b>任意角色</b>
+/// "谁和谁配对"不在这里选 —— 那是在多人选人界面按「加入合作模式」决定的（见
+/// <c>Together.Core.Foundation.CoopLobbyData</c>），这样两个玩家可以选<b>任意角色</b>
 /// （甚至不同角色）组成合作组。
 /// </para>
 /// <para>
@@ -47,12 +48,8 @@ internal static class TogetherModSettingsPage
             {
                 settings.SymbiosisEnabled = value;
 
-                // 关掉合作模式 = 取消这一次的配对：把已经加入过的成员一并清掉并广播，
-                // 否则下次再打开开关时，上一局按过按钮的人会"自动"回到组里。
-                if (!value)
-                {
-                    SymbiosisMembers.Reset(RunManager.Instance?.NetService, "symbiosis_disabled");
-                }
+                // 不用清名单：投票是**每个大厅会话**的暂存数据（RunSavedData Lobby Scope），
+                // 进新大厅自然是空的；关掉开关后按钮也跟着消失（见 TogetherCoopGate.Applies）。
 
                 // 主机改完立刻广播：配不配对要两端算得一样，否则会分叉。
                 TogetherSettingsSync.PublishHostSettings("settings_changed");
@@ -86,6 +83,106 @@ internal static class TogetherModSettingsPage
                 TogetherSettingsSync.PublishHostSettings("settings_changed");
             });
 
+        // 兼容性开关（B 类"改本体行为"的补丁各一条）：默认开 = 保持既有体验；关掉 = 回到原版行为。
+        var compatOrderBinding = new ModSettingsValueBinding<TogetherSettings, bool>(
+            Const.ModId,
+            TogetherSettingsStore.DataKey,
+            SaveScope.Global,
+            _ => TogetherSettingsSync.EffectiveCompatDeterministicOrder,
+            (settings, value) =>
+            {
+                settings.CompatDeterministicOrder = value;
+                TogetherSettingsSync.PublishHostSettings("settings_changed");
+            });
+
+        var compatDedupeBinding = new ModSettingsValueBinding<TogetherSettings, bool>(
+            Const.ModId,
+            TogetherSettingsStore.DataKey,
+            SaveScope.Global,
+            _ => TogetherSettingsSync.EffectiveCompatHookDedupe,
+            (settings, value) =>
+            {
+                settings.CompatHookDedupe = value;
+                TogetherSettingsSync.PublishHostSettings("settings_changed");
+            });
+
+        var compatWidenBinding = new ModSettingsValueBinding<TogetherSettings, bool>(
+            Const.ModId,
+            TogetherSettingsStore.DataKey,
+            SaveScope.Global,
+            _ => TogetherSettingsSync.EffectiveCompatHookWiden,
+            (settings, value) =>
+            {
+                settings.CompatHookWiden = value;
+                TogetherSettingsSync.PublishHostSettings("settings_changed");
+            });
+
+        var compatCardViewBinding = new ModSettingsValueBinding<TogetherSettings, bool>(
+            Const.ModId,
+            TogetherSettingsStore.DataKey,
+            SaveScope.Global,
+            _ => TogetherSettingsSync.EffectiveCompatSharedCardView,
+            (settings, value) =>
+            {
+                settings.CompatSharedCardView = value;
+                TogetherSettingsSync.PublishHostSettings("settings_changed");
+            });
+
+        var compatEchoPopulateBinding = new ModSettingsValueBinding<TogetherSettings, bool>(
+            Const.ModId,
+            TogetherSettingsStore.DataKey,
+            SaveScope.Global,
+            _ => TogetherSettingsSync.EffectiveCompatEchoPopulateSkip,
+            (settings, value) =>
+            {
+                settings.CompatEchoPopulateSkip = value;
+                TogetherSettingsSync.PublishHostSettings("settings_changed");
+            });
+
+        var orbCapBinding = new ModSettingsValueBinding<TogetherSettings, OrbCapMode>(
+            Const.ModId,
+            TogetherSettingsStore.DataKey,
+            SaveScope.Global,
+            _ => TogetherSettingsSync.EffectiveOrbCap,
+            (settings, value) =>
+            {
+                settings.OrbCap = value;
+                TogetherSettingsSync.PublishHostSettings("settings_changed");
+            });
+
+        var compatMirroredPowerBinding = new ModSettingsValueBinding<TogetherSettings, bool>(
+            Const.ModId,
+            TogetherSettingsStore.DataKey,
+            SaveScope.Global,
+            _ => TogetherSettingsSync.EffectiveCompatMirroredPowerSingleFire,
+            (settings, value) =>
+            {
+                settings.CompatMirroredPowerSingleFire = value;
+                TogetherSettingsSync.PublishHostSettings("settings_changed");
+            });
+
+        var compatImbuedBinding = new ModSettingsValueBinding<TogetherSettings, bool>(
+            Const.ModId,
+            TogetherSettingsStore.DataKey,
+            SaveScope.Global,
+            _ => TogetherSettingsSync.EffectiveCompatImbuedOnce,
+            (settings, value) =>
+            {
+                settings.CompatImbuedOnce = value;
+                TogetherSettingsSync.PublishHostSettings("settings_changed");
+            });
+
+        var compatRandomForeseerBinding = new ModSettingsValueBinding<TogetherSettings, bool>(
+            Const.ModId,
+            TogetherSettingsStore.DataKey,
+            SaveScope.Global,
+            _ => TogetherSettingsSync.EffectiveCompatRandomForeseerSync,
+            (settings, value) =>
+            {
+                settings.CompatRandomForeseerSync = value;
+                TogetherSettingsSync.PublishHostSettings("settings_changed");
+            });
+
         var shareGoldBinding = new ModSettingsValueBinding<TogetherSettings, bool>(
             Const.ModId,
             TogetherSettingsStore.DataKey,
@@ -102,6 +199,80 @@ internal static class TogetherModSettingsPage
             .WithModDisplayName(ModSettingsText.Literal("Together"))
             // 局内改设置没有意义（配对在选人阶段就定下来了），直接只读，避免"改了没生效"的困惑。
             .WithReadOnlyOnHostSurfaces(ModSettingsHostSurface.RunPause | ModSettingsHostSurface.CombatPause)
+            // 兼容性开关：这几条改的是"本体自己也会走的路径"，与别的 mod 冲突时可以逐条关掉回退。
+            .AddSection("compat", section => section
+                .WithTitle(T("together.settings.compat.title", "兼容性（高风险补丁）"))
+                .AddToggle(
+                    "compat_order",
+                    T("together.settings.compat.order.label", "牌序全序化（CardModel.CompareTo）"),
+                    compatOrderBinding,
+                    T(
+                        "together.settings.compat.order.description",
+                        "开启：让卡牌之间有一个确定的全序，两端排序/洗牌算得一样（共享局的顺序一致性靠它）。\n"
+                        + "关闭：用本体原本的比较器 —— 顺序可能两端漂移（只在与其他 mod 冲突时关）。"))
+                .AddToggle(
+                    "compat_dedupe",
+                    T("together.settings.compat.dedupe.label", "钩子监听表去重"),
+                    compatDedupeBinding,
+                    T(
+                        "together.settings.compat.dedupe.description",
+                        "开启：共享牌堆/共享主卡组让同一张牌被收集两次时按引用去重。\n"
+                        + "关闭：保留本体的重复监听者（可能让注能类能力重复触发）。"))
+                .AddToggle(
+                    "compat_widen",
+                    T("together.settings.compat.widen.label", "遗物钩子「组内放宽」"),
+                    compatWidenBinding,
+                    T(
+                        "together.settings.compat.widen.description",
+                        "开启：共享局里「牌进卡组」的通知按组内每个成员各派发一次 —— 五轮书这类按「牌属于谁」认领的遗物会按全组记账。\n"
+                        + "关闭：回到本体行为（只通知牌的所有者那一位），两端仍然一致，只是回声侧那本遗物不再涨。"))
+                .AddToggle(
+                    "compat_cardview",
+                    T("together.settings.compat.cardview.label", "回声共享卡牌视图置空"),
+                    compatCardViewBinding,
+                    T(
+                        "together.settings.compat.cardview.description",
+                        "开启：怪物招式期间，回声那一侧的「共享卡牌视图」返回空 —— 同一批共享牌只被处理一次。\n"
+                        + "关闭：恢复全员可见（可能让「遍历共享牌」的怪招重复处理、数值翻倍）。"))
+                .AddToggle(
+                    "compat_echo_populate",
+                    T("together.settings.compat.echopopulate.label", "回声不重复填充战斗牌堆"),
+                    compatEchoPopulateBinding,
+                    T(
+                        "together.settings.compat.echopopulate.description",
+                        "开启：进战斗时只让锚点把主卡组复制进抽牌堆 —— 主卡组只有一份，回声再填一次就是双倍卡组。\n"
+                        + "关闭：回声也照常填充（共享卡组会变成两份）。只在「另一个 mod 自己接管了回声的战斗牌堆」时才关。"))
+                .AddToggle(
+                    "compat_mirrored_power",
+                    T("together.settings.compat.mirroredpower.label", "镜像能力的回合末结算只算一次"),
+                    compatMirroredPowerBinding,
+                    T(
+                        "together.settings.compat.mirroredpower.description",
+                        "开启：临时力量/敏捷/集中、虚弱/易伤/脆弱这几个「会改身体数值」的回合末能力只由原件结算一次（镜像副本不重复扣）。\n"
+                        + "关闭：每份镜像各扣一次（数值会翻倍甚至变负）。"))
+                .AddToggle(
+                    "compat_imbued",
+                    T("together.settings.compat.imbued.label", "注能每场战斗只自动打出一次"),
+                    compatImbuedBinding,
+                    T(
+                        "together.settings.compat.imbued.description",
+                        "开启：同一张注能牌在本场战斗里只自动打出一次（按对象引用去重）。\n"
+                        + "关闭：本体照常派发（配合上面那条「只跑锚点那次」一般也不会重复）。"))
+                .AddToggle(
+                    "compat_random_foreseer",
+                    T("together.settings.compat.randomforeseer.label", "随机数预测联动（RandomForeseer）"),
+                    compatRandomForeseerBinding,
+                    T(
+                        "together.settings.compat.randomforeseer.description",
+                        "开启：装了「随机数预测」时，让它每次预测只建一份共享牌堆 / 球队列副本 —— 修掉「抽牌预测连续都是第一张牌」和「充能球伤害预测不准」。\n"
+                        + "关闭：完全不碰对方的预测内核（预测退回它原本的算法）。\n"
+                        + "没装那个 mod 时这项没有任何效果。"))
+                .AddParagraph(
+                    "compat_note",
+                    T(
+                        "together.settings.compat.note",
+                        "这一组默认全开。它们改的是本体自己也会走的路径，所以只在「与某个 mod 冲突」时逐条关掉回退。\n"
+                        + "联机时以主机设置为准（否则一端关一端开会直接分叉）。")))
             .AddSection("symbiosis", section => section
                 .WithTitle(T("together.settings.section.title", "合作模式"))
                 .AddToggle(
@@ -141,6 +312,23 @@ internal static class TogetherModSettingsPage
                         "开启：合作组成员共用一个金币余额 —— 谁捡到金币、谁在商店花掉，都是改同一份余额。\n"
                         + "开局把所有人的起始金币【加起来】当共同余额（99 × 人数；只在开新局时加一次，"
                         + "读档/重连不会重复加）；关闭时各花各的。\n"
+                        + "联机时以主机设置为准。"))
+                .AddEnumChoice(
+                    "orb_cap_mode",
+                    T("together.settings.orbcap.label", "共享球位上限"),
+                    orbCapBinding,
+                    value => value switch
+                    {
+                        OrbCapMode.Vanilla => T("together.settings.orbcap.option.vanilla", "原版 10 格"),
+                        OrbCapMode.PerMember => T("together.settings.orbcap.option.per_member", "10 × 全部人数"),
+                        _ => T("together.settings.orbcap.option.auto", "自动（10 × 有球位人数）"),
+                    },
+                    T(
+                        "together.settings.orbcap.description",
+                        "几个人的充能球位是同一口队列，上限按这个口径放大。\n"
+                        + "自动：10 × 本局「有球位」的成员数（两个故障机器人 = 20；只有一个人有球位就还是 10）——默认。\n"
+                        + "原版 10 格：完全照原版，共享时球位容易不够放。\n"
+                        + "10 × 全部人数：不看角色，按组内人数算（3 人局就算只有 1 个机器人也给 30 格）。\n"
                         + "联机时以主机设置为准。"))
                 .AddParagraph(
                     "how_it_works",

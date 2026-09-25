@@ -1,4 +1,4 @@
-using System.Reflection;
+﻿using System.Reflection;
 using System.Text.Json;
 
 using HarmonyLib;
@@ -6,12 +6,16 @@ using MegaCrit.Sts2.Core.Multiplayer.Game;
 using MegaCrit.Sts2.Core.Multiplayer;
 using MegaCrit.Sts2.Core.Runs;
 using STS2RitsuLib.Networking.Sidecar;
-using Together.Core.Combat;
-using Together.Core.Content;
+using Together.Core.Alignment;
+using Together.Core.Foundation;
+using Together.Core.Shared.Body;
+using Together.Core.Shared.Gold;
+using Together.Core.Shared.Orb;
+using Together.Core.Shared.Pet;
+using Together.Core.Shared.Power;
 using Together;
 
 namespace Together.Core.Settings;
-
 /// <summary>联机时的"共享角色"设置同步：<b>以主机为准</b>。</summary>
 /// <remarks>
 /// 为什么必须同步：配不配对是<b>每台机器各自算</b>的（<c>TogetherPair.Arm</c> 依据"本局有几名玩家选了那个角色"）。
@@ -129,6 +133,65 @@ internal static class TogetherSettingsSync
         }
     }
 
+    /// <summary>本局实际生效的「牌序全序化」开关（客户端跟随主机）。</summary>
+    public static bool EffectiveCompatDeterministicOrder => ReadCompat(snapshot => snapshot.CompatDeterministicOrder, TogetherSettingsStore.CompatDeterministicOrder);
+
+    /// <summary>本局实际生效的「钩子监听表去重」开关（客户端跟随主机）。</summary>
+    public static bool EffectiveCompatHookDedupe => ReadCompat(snapshot => snapshot.CompatHookDedupe, TogetherSettingsStore.CompatHookDedupe);
+
+    /// <summary>本局实际生效的「钩子派发组内放宽」开关（客户端跟随主机）。</summary>
+    public static bool EffectiveCompatHookWiden => ReadCompat(snapshot => snapshot.CompatHookWiden, TogetherSettingsStore.CompatHookWiden);
+
+    /// <summary>本局实际生效的「回声共享卡牌视图置空」开关（客户端跟随主机）。</summary>
+    public static bool EffectiveCompatSharedCardView => ReadCompat(snapshot => snapshot.CompatSharedCardView, TogetherSettingsStore.CompatSharedCardView);
+
+    /// <summary>本局实际生效的「回声不重复填充战斗牌堆」开关（客户端跟随主机）。</summary>
+    public static bool EffectiveCompatEchoPopulateSkip => ReadCompat(snapshot => snapshot.CompatEchoPopulateSkip, TogetherSettingsStore.CompatEchoPopulateSkip);
+
+    /// <summary>本局实际生效的「镜像副本回合末只结算一次」开关（客户端跟随主机）。</summary>
+    public static bool EffectiveCompatMirroredPowerSingleFire => ReadCompat(snapshot => snapshot.CompatMirroredPowerSingleFire, TogetherSettingsStore.CompatMirroredPowerSingleFire);
+
+    /// <summary>本局实际生效的「注能每场战斗只自动打出一次」开关（客户端跟随主机）。</summary>
+    public static bool EffectiveCompatImbuedOnce => ReadCompat(snapshot => snapshot.CompatImbuedOnce, TogetherSettingsStore.CompatImbuedOnce);
+
+    /// <summary>本局实际生效的「随机数预测（RandomForeseer）联动」开关（客户端跟随主机）。</summary>
+    public static bool EffectiveCompatRandomForeseerSync => ReadCompat(snapshot => snapshot.CompatRandomForeseerSync, TogetherSettingsStore.CompatRandomForeseerSync);
+
+    /// <summary>本局实际生效的"共享球位上限口径"（客户端跟随主机）。</summary>
+    public static OrbCapMode EffectiveOrbCap
+    {
+        get
+        {
+            Initialize();
+
+            lock (Gate)
+            {
+                if (_remote is { } remote)
+                {
+                    return remote.OrbCap;
+                }
+            }
+
+            return TogetherSettingsStore.OrbCap;
+        }
+    }
+
+    /// <summary>联机时读主机广播的开关，否则读本机设置。</summary>
+    private static bool ReadCompat(Func<Snapshot, bool> fromRemote, bool local)
+    {
+        Initialize();
+
+        lock (Gate)
+        {
+            if (_remote is { } remote)
+            {
+                return fromRemote(remote);
+            }
+        }
+
+        return local;
+    }
+
     public static void Initialize()
     {
         lock (Gate)
@@ -192,7 +255,16 @@ internal static class TogetherSettingsSync
                 TogetherSettingsStore.MergeStarterDecks,
                 TogetherSettingsStore.HpBonusPercent,
                 TogetherSettingsStore.GroupSize,
-                TogetherSettingsStore.ShareGold),
+                TogetherSettingsStore.ShareGold,
+                TogetherSettingsStore.CompatDeterministicOrder,
+                TogetherSettingsStore.CompatHookDedupe,
+                TogetherSettingsStore.CompatHookWiden,
+                TogetherSettingsStore.CompatSharedCardView,
+                TogetherSettingsStore.CompatEchoPopulateSkip,
+                TogetherSettingsStore.CompatMirroredPowerSingleFire,
+                TogetherSettingsStore.CompatImbuedOnce,
+                TogetherSettingsStore.CompatRandomForeseerSync,
+                TogetherSettingsStore.OrbCap),
             (_, _) => false,
             (state, _) => state);
     }
@@ -229,7 +301,8 @@ internal static class TogetherSettingsSync
         Main.Logger.Info(
             $"[together] 跟随主机设置：共生体={snapshot.SymbiosisEnabled}"
             + $" 合并初始卡组={snapshot.MergeStarterDecks} 血量提升={snapshot.HpBonusPercent}%"
-            + $" 人数上限={snapshot.GroupSize} 共享金币={snapshot.ShareGold}");
+            + $" 人数上限={snapshot.GroupSize} 共享金币={snapshot.ShareGold}"
+            + $" 共享球位上限={snapshot.OrbCap}");
     }
 
     private sealed record Snapshot(
@@ -237,7 +310,17 @@ internal static class TogetherSettingsSync
         bool MergeStarterDecks,
         int HpBonusPercent,
         int GroupSize,
-        bool ShareGold);
+        bool ShareGold,
+        // 兼容性开关：带默认值 → 老 payload（没有这几个字段）也能解析，不会因"字段变多"报错。
+        bool CompatDeterministicOrder = true,
+        bool CompatHookDedupe = true,
+        bool CompatHookWiden = true,
+        bool CompatSharedCardView = true,
+        bool CompatEchoPopulateSkip = true,
+        bool CompatMirroredPowerSingleFire = true,
+        bool CompatImbuedOnce = true,
+        bool CompatRandomForeseerSync = true,
+        OrbCapMode OrbCap = OrbCapMode.Auto);
 }
 
 /// <summary>主机开服（ENet 直连 / Steam）时广播一次设置，并清掉上一局的大厅成员名单。</summary>
@@ -258,7 +341,6 @@ internal static class HostStartSettingsSyncPatch
             : "start_steam_host";
 
         TogetherSettingsSync.PublishHostSettings(__instance, reason);
-        SymbiosisMembers.Reset(__instance, reason);
     }
 }
 
@@ -270,7 +352,6 @@ internal static class HostPeerReadySettingsSyncPatch
     private static void Postfix(NetHostGameService __instance)
     {
         TogetherSettingsSync.PublishHostSettings(__instance, "peer_ready");
-        SymbiosisMembers.PublishHostState(__instance, "peer_ready");
     }
 }
 
@@ -300,6 +381,5 @@ internal static class ClientResetSettingsSyncPatch
     private static void Clear()
     {
         TogetherSettingsSync.ClearRemote();
-        SymbiosisMembers.ClearRemote();
     }
 }

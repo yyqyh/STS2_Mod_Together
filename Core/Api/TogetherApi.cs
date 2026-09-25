@@ -1,17 +1,24 @@
-using MegaCrit.Sts2.Core.Entities.Cards;
+﻿using MegaCrit.Sts2.Core.Entities.Cards;
 using MegaCrit.Sts2.Core.Entities.Creatures;
 using MegaCrit.Sts2.Core.Entities.Orbs;
 using MegaCrit.Sts2.Core.Entities.Players;
 using MegaCrit.Sts2.Core.Models;
 using MegaCrit.Sts2.Core.Multiplayer.Game;
 using MegaCrit.Sts2.Core.Runs;
-
-using Together.Core.Combat;
+using Together.Core.Alignment;
+using Together.Core.Common;
+using Together.Core.Diagnostics;
+using Together.Core.Foundation;
 using Together.Core.Settings;
-using Together.Core.Utils;
+using Together.Core.Shared.Body;
+using Together.Core.Shared.Deck;
+using Together.Core.Shared.Gold;
+using Together.Core.Shared.Orb;
+using Together.Core.Shared.Pet;
+using Together.Core.Shared.Power;
+using Together.Core.Ui;
 
 namespace Together.Core.Api;
-
 /// <summary>
 /// <b>对外接口</b>：别的 mod 想跟本 mod 协作（或想问"我这张卡 / 这份能力在共享局里该怎么表现"）时，只依赖这个类。
 /// </summary>
@@ -33,6 +40,24 @@ public static class TogetherApi
 
     /// <summary>本 mod 版本号。</summary>
     public static string Version => Const.Version;
+
+    /// <summary>
+    /// 恒为 <c>true</c> —— <b>专给跨 mod 联动的存根当"对方在不在"的判据用</b>。
+    /// </summary>
+    /// <remarks>
+    /// RitsuLib 的 <c>[ModInterop]</c> / <c>[AssemblyInterop]</c> 只在**解析到目标类型**时才重写存根的方法体；
+    /// 解析不到时，存根自己那份方法体生效。所以消费方按这个约定写：
+    /// <code>
+    /// [AssemblyInterop("Together.Core.Api.TogetherApi, together")]
+    /// internal static class TogetherInterop
+    /// {
+    ///     public static bool IsReady => false;   // 目标没装 → 走这里
+    /// }
+    /// </code>
+    /// 装了本 mod → 调用被转发到我们这里 → <c>true</c>；没装 → 存根返回 <c>false</c>。
+    /// 于是 <c>if (TogetherInterop.IsReady)</c> 就是"together 在不在"的正确判据。
+    /// </remarks>
+    public static bool IsReady => true;
 
     // ======================================================================
     // 对局事实：谁是共生体
@@ -106,11 +131,14 @@ public static class TogetherApi
     /// <see cref="PowerMirrorPolicy.Mirror" /> = 组内每人一份（默认）；
     /// <see cref="PowerMirrorPolicy.SingleInstance" /> = 只留被施加的那一份（"我自己处理镜像"或"这份能力语义上不能复制"）。
     /// </param>
-    /// <remarks>请在 mod 初始化时调用一次；类型会在"这份能力被施加"的那一刻被查询。</remarks>
+    /// <remarks>
+    /// 请在 mod 初始化时调用一次；类型会在"这份能力被施加"的那一刻被查询。
+    /// <b>跨 mod 联动请注意</b>：这个重载的参数是我们程序集里的枚举，走 <c>[ModInterop]</c> / <c>[AssemblyInterop]</c>
+    /// 存根时消费方拿不到那个类型（值类型之间不做转换）—— 那种情况下请用下面那个 <c>bool</c> 重载。
+    /// </remarks>
     public static void RegisterPowerMirrorOverride(Type powerType, PowerMirrorPolicy policy)
     {
         ArgumentNullException.ThrowIfNull(powerType);
-        ArgumentNullException.ThrowIfNull(policy);
 
         if (!typeof(PowerModel).IsAssignableFrom(powerType))
         {
@@ -122,6 +150,24 @@ public static class TogetherApi
             policy == PowerMirrorPolicy.Mirror
                 ? PowerMirror.PowerMirrorPolicy.Mirror
                 : PowerMirror.PowerMirrorPolicy.SingleInstance);
+    }
+
+    /// <summary>
+    /// 覆写某个能力的镜像策略 —— <b>跨 mod 联动专用重载</b>（不用认识我们的枚举）。
+    /// </summary>
+    /// <param name="powerType">必须派生自 <c>PowerModel</c>。</param>
+    /// <param name="singleInstance">
+    /// <c>false</c> = 组内每人一份（默认）；<c>true</c> = 只留被施加的那一份。
+    /// </param>
+    /// <remarks>
+    /// 存在的理由：<c>[ModInterop]</c> / <c>[AssemblyInterop]</c> 的存根要求"参数类型在两边都能命名"，
+    /// 而枚举 <see cref="PowerMirrorPolicy" /> 在我们的程序集里 —— 消费方用 <c>Type</c> + <c>bool</c> 就能零引用调用。
+    /// </remarks>
+    public static void RegisterPowerMirrorOverride(Type powerType, bool singleInstance)
+    {
+        RegisterPowerMirrorOverride(
+            powerType,
+            singleInstance ? PowerMirrorPolicy.SingleInstance : PowerMirrorPolicy.Mirror);
     }
 
     // ======================================================================
