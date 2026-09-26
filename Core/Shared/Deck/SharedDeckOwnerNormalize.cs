@@ -7,7 +7,7 @@ using Together.Core.Foundation;
 namespace Together.Core.Shared.Deck;
 
 /// <summary>
-/// 共享卡组的 owner 归一：<b>每次 RunState 从存档重建之后</b>，把共享卡组里所有牌的 owner 钉成锚点。
+/// 共享卡组的 owner 修复：<b>每次 RunState 从存档重建之后</b>，按槽位表还原每张牌的 owner；表不可用才全钉锚点。
 /// </summary>
 /// <remarks>
 /// <para>
@@ -27,9 +27,11 @@ namespace Together.Core.Shared.Deck;
 /// 按 <c>RunState.Players</c> 顺序取第一个成员当锚点，这样两端算出来是同一个人。
 /// </para>
 /// <para>
-/// <b>取舍</b>：归一之后牌失去"自然归属"（按 <c>card.Owner</c> 判定的遗物会按锚点统一计数），
-/// 但两端一致 —— 这正是 yyqy 给的"最省事"方案；要保住原归属得再自己存一份
-/// 「按 Deck 顺序的 owner 槽位数组 + 指纹」。
+/// <b>取舍（2026-09-26 起）</b>：现在优先用 <see cref="SharedDeckOwnerSlots" /> 那份"按 Deck 顺序的
+/// owner 槽位数组 + 指纹"（随 run snapshot / 存档同步，两端各写一份、内容由同一份卡组状态算出）
+/// 把每张牌还原成它<b>原本</b>的主人 —— 自然归属与两端一致性同时保住。
+/// 只有槽位表不可用（老存档、卡组形状被别的路径改过）时才退回"全部钉锚点"：
+/// 那时牌会失去自然归属（按 <c>card.Owner</c> 判定的遗物会按锚点统一计数），但两端仍一致。
 /// </para>
 /// </remarks>
 [HarmonyPatch(typeof(RunState), nameof(RunState.FromSerializable))]
@@ -68,33 +70,22 @@ internal static class SharedDeckOwnerNormalizePatch
                 return;
             }
 
-            var normalized = 0;
-            foreach (var card in deck.Cards.ToList())
+            // 顺手登记"这张牌属于共享卡组"（事件并发守卫要靠它区分"我们的牌"和"别的 mod 的牌"）。
+            foreach (var card in deck.Cards)
             {
-                // 顺手登记"这张牌属于共享卡组"（事件并发守卫要靠它区分"我们的牌"和"别的 mod 的牌"）。
                 SharedDeckRegistry.Register(card);
-
-                if (ReferenceEquals(card.Owner, anchor))
-                {
-                    continue;
-                }
-
-                // 顺序照抄本体 CardPileCmd.GiveToAnotherPlayer：先摘牌、再改 owner。
-                card.RemoveFromCurrentPile(true);
-                card.GiveToAnotherPlayer(anchor);
-                normalized++;
             }
 
-            if (normalized > 0)
-            {
-                CappedLog.Info(
-                    "own.deck",
-                    $"重建后共享卡组 owner 归一：{normalized} 张 → 锚点 netId={anchor.NetId}（共 {deck.Cards.Count} 张）");
-            }
-            else
-            {
-                CappedLog.Info("own.deck", $"重建后归一：无需改动（共享卡组 {deck.Cards.Count} 张已全归锚点 netId={anchor.NetId}）");
-            }
+            // ★ 优先按"槽位表"还原（保住自然归属、两端同一份数据）；表不可用才退回"全部钉锚点"。
+            // 详见 SharedDeckOwnership.Repair 的三分支说明。
+            var restored = SharedDeckOwnership.Repair(__result, deck, anchor, "from_serializable");
+
+            CappedLog.Info(
+                "own.deck",
+                restored > 0
+                    ? $"重建后共享卡组 owner 还原：{restored}/{deck.Cards.Count} 张（锚点 netId={anchor.NetId}，"
+                      + $"当前分布 {SharedDeckOwnership.DistributionOf(deck)}）"
+                    : $"重建后共享卡组 owner 无需改动（{deck.Cards.Count} 张，分布 {SharedDeckOwnership.DistributionOf(deck)}）");
         }
         catch (Exception ex)
         {

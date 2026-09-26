@@ -18,7 +18,7 @@ public static class Const
     public const string Name = "Together";
 
     /// <summary>版本号，与清单 <c>version</c> 保持一致。</summary>
-    public const string Version = "0.3.3";
+    public const string Version = "0.3.5";
 
     /// <summary>能量颜色标识：卡池 / 遗物池 / 药水池的 <c>EnergyColorName</c> 都返回它，
     /// 用来索引该池的能量图标（<c>res://images/packed/sprite_fonts/{name}_energy_icon.png</c>）。</summary>

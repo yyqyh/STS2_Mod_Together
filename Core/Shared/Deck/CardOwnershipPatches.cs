@@ -103,8 +103,7 @@ internal static class CardOwnershipImpl
             $"进手牌改写归属：牌={card.Id.Entry} {card.Owner?.NetId} → {handOwner.NetId}"
             + $"（调用者={new System.Diagnostics.StackTrace(2, false).GetFrame(0)?.GetMethod()?.Name}）");
 
-        card.RemoveFromCurrentPile(true);
-        card.GiveToAnotherPlayer(handOwner);
+        SharedDeckOwnership.MoveTo(card, handOwner, "normalize_for_hand");
     }
 
     /// <summary>手牌堆没有被共享，所以"这个 Hand 属于谁"是唯一的。</summary>
@@ -261,7 +260,7 @@ internal static class HandOwnershipInvariantPatch
             "hand.owner_fixed",
             $"进手牌归属对齐：card={__0.Id.Entry} → netId={handOwner.NetId}");
 
-        __0.GiveToAnotherPlayer(handOwner);
+        SharedDeckOwnership.SetOwner(__0, handOwner, "hand_invariant");
     }
 }
 
@@ -387,8 +386,7 @@ internal static class HandReturnOwnership
 
             // 顺序照抄本体 CardPileCmd.GiveToAnotherPlayer / CardOwnershipImpl.NormalizeForHand：
             // 必须先把牌从原堆摘出来再改 owner（反过来 owner 变了会按 owner 反查不到旧堆）。
-            card.RemoveFromCurrentPile(true);
-            card.GiveToAnotherPlayer(acting);
+            SharedDeckOwnership.MoveTo(card, acting, "hand_return");
         }
 
         SelfCheck.Write(

@@ -194,14 +194,24 @@ internal static class TogetherModSettingsPage
                 TogetherSettingsSync.PublishHostSettings("settings_changed");
             });
 
+        // 弹窗开关：**本机偏好**（另一个数据文件），不进联机同步 —— 主机不该替客户端决定要不要被打扰。
+        var alertPopupBinding = new ModSettingsValueBinding<TogetherUiPrefs, bool>(
+            Const.ModId,
+            TogetherUiPrefsStore.DataKey,
+            SaveScope.Global,
+            prefs => prefs.AlertPopup,
+            (prefs, value) => prefs.AlertPopup = value);
+
         RitsuLibFramework.RegisterModSettings(Const.ModId, page => page
             .WithTitle(T("together.settings.page.title", "Together · 合作模式"))
             .WithModDisplayName(ModSettingsText.Literal("Together"))
-            // 局内改设置没有意义（配对在选人阶段就定下来了），直接只读，避免"改了没生效"的困惑。
-            .WithReadOnlyOnHostSurfaces(ModSettingsHostSurface.RunPause | ModSettingsHostSurface.CombatPause)
+            // 局内改设置没有意义（配对在选人阶段就定下来了），所以**设置类小节**在局内只读，
+            // 避免"改了没生效"的困惑。★ 注意只加在小节上、不加在页面上：
+            // 「诊断」那一节必须任何时候都能点 —— 卡死 / 报 bug 时最需要导出 mod 列表。
             // 兼容性开关：这几条改的是"本体自己也会走的路径"，与别的 mod 冲突时可以逐条关掉回退。
             .AddSection("compat", section => section
                 .WithTitle(T("together.settings.compat.title", "兼容性（高风险补丁）"))
+                .WithReadOnlyOnHostSurfaces(ModSettingsHostSurface.RunPause | ModSettingsHostSurface.CombatPause)
                 .AddToggle(
                     "compat_order",
                     T("together.settings.compat.order.label", "牌序全序化（CardModel.CompareTo）"),
@@ -275,6 +285,7 @@ internal static class TogetherModSettingsPage
                         + "联机时以主机设置为准（否则一端关一端开会直接分叉）。")))
             .AddSection("symbiosis", section => section
                 .WithTitle(T("together.settings.section.title", "合作模式"))
+                .WithReadOnlyOnHostSurfaces(ModSettingsHostSurface.RunPause | ModSettingsHostSurface.CombatPause)
                 .AddToggle(
                     "symbiosis_enabled",
                     T("together.settings.enabled.label", "开启合作模式（共享卡组）"),
@@ -345,7 +356,62 @@ internal static class TogetherModSettingsPage
                         + "6. 每个人可以选任意角色（甚至不同角色）；共享卡组里放谁的初始卡由上面"
                         + "「开局合并双方初始卡组」决定（开启时会把所有回声的初始卡都并进来）；\n"
                         + "7. 关闭开关时，本 mod 完全不介入任何对局（正常原版局）。\n"
-                        + "联机时以主机设置为准。"))));
+                        + "联机时以主机设置为准。"))
+            )
+            // 诊断：唯一一节"任何界面都能点"的东西 —— 出问题时玩家就是靠它把环境交出来的。
+            .AddSection("diagnostics", section => section
+                .WithTitle(T("together.settings.diag.title", "诊断 / 反馈"))
+                .AddToggle(
+                    "alert_popup",
+                    T("together.settings.diag.alertpopup.label", "自检到异常时弹窗提醒（本机设置）"),
+                    alertPopupBinding,
+                    T(
+                        "together.settings.diag.alertpopup.description",
+                        "开启（默认）：检测到「两端不同步 / 我们自己的断言失败 / 补丁没装全」时弹一个窗，"
+                        + "告诉你该发哪两个文件。\n"
+                        + "关闭：不弹窗 —— 但环境快照**照旧自动导出**、log 里**照旧**有"
+                        + "「⚠ 自检异常（…）｜反馈包：…」那一行，只是不打扰你。\n"
+                        + "这是**每台机器自己**的设置（不跟主机同步）：主机关掉不会让客户端也不弹，反之亦然。"))
+                .AddButton(
+                    "export_modlist",
+                    T("together.settings.diag.export.label", "导出当前环境（mod 列表 / 设置 / 会话状态）"),
+                    T("together.settings.diag.export.button", "一键导出"),
+                    () => ModListExport.ExportBundle("settings_button", openFolder: true),
+                    ModSettingsButtonTone.Accent,
+                    T(
+                        "together.settings.diag.export.description",
+                        "把「当前启用的 mod 列表 + 本机生效设置 + 本局会话状态」写成一个 txt，"
+                        + "放进游戏的日志目录（和 godot.log 同一个文件夹）：together-modlist.txt。\n"
+                        + "点完会自动打开那个文件夹。反馈问题时把它和 godot.log 一起发过来就够了。\n"
+                        + "这条按钮在战斗中暂停界面也能点（其他设置项在局内是只读的）。"))
+                .AddParagraph(
+                    "diag_note",
+                    T(
+                        "together.settings.diag.note",
+                        "导出内容全部来自公开接口（本体的 mod 加载顺序 + RitsuLib 的 mod 清单），"
+                        + "同时会以 [together][env] 前缀写进 log —— 只会复制 log 的话，现场也一样在里面。"))
+                // 测试按钮：走的是**完全真实**的那条路（自动导出 → 弹窗 → 「打开文件夹」），
+                // 只是跳过限流，方便连点确认。真实 bug 触发的那三次额度不会被它占掉。
+                .AddButton(
+                    "test_alert",
+                    T("together.settings.diag.test.label", "测试异常弹窗（确认「自动导出 + 弹窗」这条链路）"),
+                    T("together.settings.diag.test.button", "测试一下"),
+                    TestAlert,
+                    ModSettingsButtonTone.Normal,
+                    T(
+                        "together.settings.diag.test.description",
+                        "点一下会：① 立刻导出一份环境快照；② 弹一个和真出 bug 时一模一样的窗；"
+                        + "③ 窗里的「打开文件夹」能直接定位到那个文件。\n"
+                        + "如果此刻已经有别的弹窗（比如分歧诊断面板）占着，就只导出、不弹窗 —— 和真实情况的行为一致。"))));
+    }
+
+    /// <summary>设置页的「测试弹窗」：走真实的 <see cref="TogetherAlert" /> 链路（跳过限流，不占真实额度）。</summary>
+    private static void TestAlert()
+    {
+        TogetherAlert.Notify(
+            "测试",
+            "这是手动触发的测试弹窗：用来确认「自动导出环境快照 + 弹窗 + 打开文件夹」这条链路是通的。",
+            ignoreRateLimit: true);
     }
 
     /// <summary>设置页文本的统一入口（中英按游戏语言切换，缺失时回落到中文原文）。</summary>

@@ -260,6 +260,16 @@ internal static class TogetherPair
         // （FromSerializable 那条路不会调 ApplyEffectsTo，旧存档里的重复会被原样带回来）。
         AscensionBaneDedupePatch.DedupeSharedDeck(picked[0]);
 
+        // ★ 共享卡组 owner 收口（必须在"回声的 Deck 字段已换成锚点那份"之后）：
+        // ① 先按槽位表还原每张牌原本的主人（没有表就退回全钉锚点，两端同一规则）；
+        // ② 再把当前状态记回槽位表 —— 开局合并/进阶之灾去重都改过卡组，此刻是新的基线。
+        // 这一步是"整副卡组被别处重写成同一个人的牌"的兜底：最迟在配对激活时纠回来。
+        if (picked[0].RunState is RunState armedRunState && picked[0].Deck is { } sharedDeck)
+        {
+            SharedDeckOwnership.Repair(armedRunState, sharedDeck, picked[0], "arm");
+            SharedDeckOwnerSlots.Capture(armedRunState, sharedDeck, "arm");
+        }
+
         // 金币共享（可选）：新局把所有人的起始金币加起来（99 × n），读档/重连只做对齐。
         GoldMirror.OnArm(needsOpeningSetup);
 
@@ -437,7 +447,7 @@ internal static class TogetherPair
             var targetPile = toP1 ? p1Deck : p2Deck;
 
             targetPile.AddInternal(card, -1, silent: true);
-            card.GiveToAnotherPlayer(toP1 ? p1 : p2);
+            SharedDeckOwnership.SetOwner(card, toP1 ? p1 : p2, "unbind_split");
         }
 
         Log.Info(
@@ -482,7 +492,7 @@ internal static class TogetherPair
         {
             fromDeck.RemoveInternal(card, silent: true);
             toDeck.AddInternal(card, -1, silent: true);
-            card.GiveToAnotherPlayer(to);
+            SharedDeckOwnership.SetOwner(card, to, "merge_starter_deck");
         }
 
         Log.Info(

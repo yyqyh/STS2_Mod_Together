@@ -4,7 +4,7 @@
   "name": "Together",
   "author": "b4c",
   "description": "合作模式（联机共享卡组）/ Co-op Mode (multiplayer shared deck)：多名玩家共用一个身体——共享血量 / 格挡 / 状态、共享卡组与抽弃牌堆，各自保留手牌与能量。在多人选人界面按「加入合作模式」即成组（≥2 人，各人可选不同角色）；不开启开关时本 mod 完全不介入对局。 | Multiple players share one body: HP / Block / status / deck / draw-discard piles are shared, hand and energy stay per player. Press “Join Co-op Mode” on the multiplayer character-select screen to group up (2+ players); with the switch off the mod stays out of your runs.",
-  "version": "0.3.3",
+  "version": "0.3.5",
   "has_pck": true,
   "has_dll": true,
   "affects_gameplay": true,

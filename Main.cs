@@ -5,6 +5,7 @@ using MegaCrit.Sts2.Core.Logging;
 using MegaCrit.Sts2.Core.Modding;
 using STS2RitsuLib.Interop;
 using STS2RitsuLib;
+using Together.Core.Diagnostics;
 using Together.Core.Foundation;
 using Together.Core.Settings;
 using Together.Core.Shared.Deck;
@@ -50,6 +51,8 @@ namespace Together;
 
             // 设置要在任何"读设置"的代码之前就位（共享角色目标就是从设置里读的）。
             TogetherSettingsStore.Initialize();
+            // 本机界面偏好（弹窗开关这类"每台机器自己决定"的东西）也要在设置界面绑定之前注册好。
+            TogetherUiPrefsStore.Initialize();
             TogetherSettingsSync.Initialize();
             TogetherModSettingsPage.Register();
 
@@ -65,6 +68,10 @@ namespace Together;
             // 可选联动：随机数预测（RandomForeseer）。等它真的加载了才挂，
             // 所以这里只是"登记 + 试挂一次"，对方没装就什么都不发生。
             Together.Core.Integrations.RandomForeseer.RandomForeseerInstaller.Install(Patcher, assembly);
+
+            // (B) 判据：把"重写了回合族钩子且会产生外部效果"的能力也收口成"效果只算原件一次"。
+            // 启动时扫一遍；之后每加载一个 mod 增量扫一次（扫过的程序集按 MVID 记账，不会重扫）。
+            Together.Core.Shared.Power.PowerOnceHookInstaller.Install(Patcher);
         }
 
         /// <summary>逐个补丁类安装，失败只废掉那一个类。</summary>
@@ -81,6 +88,7 @@ namespace Together;
             Patcher = harmony;
             var applied = 0;
             var failed = 0;
+            var failedClasses = new List<string>();
 
             foreach (var type in assembly.GetTypes())
             {
@@ -104,6 +112,7 @@ namespace Together;
                 catch (Exception ex)
                 {
                     failed++;
+                    failedClasses.Add(type.Name);
                     // Harmony 会把真正的原因包在内层异常里（Transpiler 抛出的匹配失败提示就在那儿），
                     // 只打 ex.Message 会看到一串无用的"Patching exception in method …"。
                     Log.Error($"[{ModId}] 补丁类 {type.Name} 应用失败：{Describe(ex)}");
@@ -114,6 +123,14 @@ namespace Together;
             Log.Info(
                 $"[{ModId}] initialized v{Const.Version}; patch classes applied={applied} failed={failed}; "
                 + $"Harmony patched {harmony.GetPatchedMethods().Count()} method(s).");
+
+            // 有补丁类没装上 = 功能少一块，玩家不会知道 → 自动导出环境快照 + 尝试弹窗提示反馈。
+            if (failed > 0)
+            {
+                TogetherAlert.Notify(
+                    "补丁安装",
+                    $"{failed} 个补丁类没装上：{string.Join(", ", failedClasses)}（详见 log 里的\"补丁类 … 应用失败\"）");
+            }
         }
 
         /// <summary>把异常链摊平成一行，便于在日志里直接看到补丁失败的真实原因。</summary>

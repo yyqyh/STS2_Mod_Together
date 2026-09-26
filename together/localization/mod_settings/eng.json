@@ -36,5 +36,15 @@
   "together.settings.compat.imbued.description": "On: the same Imbued card auto-plays only once per combat (deduplicated by object reference).\nOff: vanilla per-player dispatch (Imbued may auto-play twice; the second one often stalls in a choice screen).",
   "together.settings.compat.randomforeseer.label": "Random Foreseer integration",
   "together.settings.compat.randomforeseer.description": "On: with Random Foreseer installed, each prediction builds a single copy of the shared draw pile / orb queue — fixes \"draw prediction keeps showing the same first card\" and inaccurate orb damage forecasts.\nOff: their prediction core is left completely alone (forecasts fall back to its original algorithm).\nHas no effect when that mod is not installed.",
-  "together.settings.compat.note": "This group is on by default. These patches touch paths the base game itself uses, so switch them off one by one only when another mod conflicts.\nIn multiplayer the host's settings win (otherwise one side on / one side off would desync)."
+  "together.settings.compat.note": "This group is on by default. These patches touch paths the base game itself uses, so switch them off one by one only when another mod conflicts.\nIn multiplayer the host's settings win (otherwise one side on / one side off would desync).",
+  "together.settings.diag.title": "Diagnostics / feedback",
+  "together.settings.diag.export.label": "Export current environment (mod list / settings / session)",
+  "together.settings.diag.export.button": "Export",
+  "together.settings.diag.export.description": "Writes \"enabled mod list + effective settings + current session state\" as a txt into the game's log folder (next to godot.log): together-modlist.txt.\nThe folder opens automatically afterwards. When reporting a bug, send that file together with godot.log.\nThis button works from the in-combat pause screen too (the other settings rows are read-only during a run).",
+  "together.settings.diag.note": "Everything is read through public APIs (the game's mod load order + RitsuLib's mod inventory), and the same text is also written to the log with a [together][env] prefix — so a log-only report still carries it.",
+  "together.settings.diag.test.label": "Test the alert popup (verifies export + popup end to end)",
+  "together.settings.diag.test.button": "Test it",
+  "together.settings.diag.test.description": "Clicking it will: (1) build a feedback bundle right away (environment snapshot + a copy of godot.log); (2) show exactly the same popup a real bug would show; (3) the popup's \"Open folder\" button jumps to that bundle folder.\nIf another modal (e.g. the divergence panel) is open right now, it only exports and skips the popup — same behaviour as a real alert.",
+  "together.settings.diag.alertpopup.label": "Popup when a self-check fails (this machine only)",
+  "together.settings.diag.alertpopup.description": "On (default): when a desync / one of our own assertions / a failed patch class is detected, show a popup telling you which two files to send.\nOff: no popup — the feedback bundle is still built automatically and the log still gets the \"⚠ 自检异常（…）｜反馈包：…\" line; you just won't be interrupted.\nThis is a per-machine preference (never synced from the host): turning it off on the host does not silence a client and vice versa."
 }

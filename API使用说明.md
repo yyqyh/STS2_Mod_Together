@@ -4,7 +4,7 @@
 > 文件位置：`together/API使用说明.md`；每次构建会自动复制一份到
 > `…\steamapps\common\Slay the Spire 2\mods\together\`。
 >
-> 当前版本：**0.3.1**　｜　接口类型：`Together.Core.Api.TogetherApi`
+> 当前版本：**0.3.5**　｜　接口类型：`Together.Core.Api.TogetherApi`
 
 ---
 
@@ -24,7 +24,7 @@
 在你自己 mod 的清单里加：
 
 ```json
-"dependencies": [{ "id": "together", "min_version": "0.3.0" }]
+      "dependencies": [{ "id": "together", "min_version": "0.3.5" }]
 ```
 
 依赖会被**拓扑排序**（together 先加载），缺少依赖时你的 mod 直接 `Failed`。
@@ -332,7 +332,7 @@ if (chk != 0) Logger.Info($"chk={chk} my_state hand={hand} draw={draw}");
 
 | 版本 | 日期 | 变更 |
 |---|---|---|
-| **未发布** | 2026-09-25 | ① 新增 `RegisterPowerMirrorOverride(Type, bool singleInstance)` —— 跨 mod 联动重载（原来的枚举重载在 `[ModInterop]` / `[AssemblyInterop]` 存根里用不了，见 §1.2 的"interop 友好度"表）。② 新增 `IsReady`（恒 `true`）—— 给存根当"对方在不在"的判据。③ 文档补 §1.3 可直接抄的存根模板。均向后兼容；发布时并进下一个版本号 |
+| **0.3.5** | 2026-09-26 | ① 新增 `RegisterPowerMirrorOverride(Type, bool singleInstance)` —— 跨 mod 联动重载（原来的枚举重载在 `[ModInterop]` / `[AssemblyInterop]` 存根里用不了，见 §1.2 的"interop 友好度"表）。② 新增 `IsReady`（恒 `true`）—— 给存根当"对方在不在"的判据。③ 文档补 §1.3 可直接抄的存根模板。均向后兼容。<br>**0.3.2 ~ 0.3.4 无接口变更**（内部重构：兼容性收窄 / 随机数预测联动 / 归属槽位表 / 反馈开关）。0.3.5 另外补了「诊断 / 反馈」小节（一键导出环境、反馈包、自检弹窗开关）——**不涉及对外接口**，但依赖方可以据此让玩家一键把环境发出来 |
 | **0.3.1** | 2026-09-24 | ① **新增 `Checkpoint(tag, data = "")`**：打对账点（生成一次校验和 → 输出 `[sync] chk=<id> ctx=… tag=together.state …` → 返回 id；非联机返回 0）。同期 together 侧：**自检默认在共享局开启**（`TOGETHER_SELFCHECK` 仍可 `1`/`0` 强制），所有自带诊断行自动加 `chk=<当前号>` 前缀 —— 于是两端日志可以直接按 `chk` 分组对照。用 `Checkpoint` 时**两端调用次数必须一致**。② **选人界面改版（合作模式）**：按钮文案改为「加入合作模式」/「退出合作模式」（无悬浮人数分数），按下 = 登记 + 让本体走一遍"确认准备"（内部反射调 `NCharacterSelectScreen.OnEmbarkPressed`，退出走 `OnUnreadyPressed`）；**删除起程门控与人数上限**（谁都能加入、≥2 人自成组、只有 1 人加入时按普通联机打），官方确认键不再被本 mod 触碰。`GroupSize` 连同设置项一起退役为历史字段（接口保留，行为不变） |
 | **0.3.0** | 2026-09-24 | **首次发布对外 API 说明**。新增三组接口：`RegisterPairRule`（配对规则）、`IsBound` / `Unbind`（解绑）、`SymbiosisEnabled` / `GroupSize` / `MergeStarterDecks` / `HpBonusPercent` / `ShareGold`（设置只读）。同时把此前已在 `TogetherApi` 上的成员一并纳入正式承诺：`IsActive` / `IsMember` / `Anchor` / `Members` / `OthersOf` / `Counterpart` / `OtherBody` / `PetCounterpart` / `IsSharedOrbQueue` / `SharedOrbQueueOwner` / `IsMirroredPower` / `RegisterPowerMirrorOverride` / `RegisterPetKeyRule` / `RegisterPetPairing` / `PileFingerprint` |
 | （模板） | yyyy-mm-dd | 新增 `xxx`；**破坏性**：`yyy` 由 `a` 改成 `b`（调用方需要改这里）；废弃 `zzz`（改用 …） |

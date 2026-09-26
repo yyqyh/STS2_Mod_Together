@@ -4,16 +4,9 @@ using MegaCrit.Sts2.Core.Entities.Players;
 using MegaCrit.Sts2.Core.GameActions;
 using MegaCrit.Sts2.Core.Logging;
 using MegaCrit.Sts2.Core.Multiplayer.Game;
-using Together.Core.Alignment;
-using Together.Core.Common;
 using Together.Core.Foundation;
 using Together.Core.Shared.Deck;
-using Together.Core.Shared.Body;
-using Together.Core.Shared.Gold;
-using Together.Core.Shared.Orb;
-using Together.Core.Shared.Pet;
-using Together.Core.Shared.Power;
-using Together.Core.Ui;
+
 
 namespace Together.Core.Diagnostics;
 /// <summary>自检 / 对账日志：把状态按校验和的 <c>id</c> 打出来 —— 两端同一个 id 就是同一步骤。</summary>
@@ -90,6 +83,10 @@ internal static class SelfCheck
             return;
         }
 
+        // 归属漂移监视：只在"分布真的变了"时打一行（含上一跳 → 这一跳）。两端同一 chk 的分布
+        // 应当逐字相同 —— 不同就是 owner 又被人整体改写了，这一行是下一次排查的第一现场。
+        OwnerDriftWatch.OnCheckpoint(id, context, anchor);
+
         Log.Info(Line(id, context, "anchor", anchor));
 
         foreach (var echo in TogetherPair.Echoes)
@@ -142,6 +139,59 @@ internal static class SelfCheck
 
         return $"hp={creature?.CurrentHp}/{creature?.MaxHp} block={creature?.Block}"
                + $" powers=[{powers}] {piles} deck={deckText} owners=[{owners}] gold={player.Gold} orbs={orbs}";
+    }
+}
+
+/// <summary>共享卡组 owner 分布的"变化监视"：只在分布真的变了的时候打一行。</summary>
+/// <remarks>
+/// 用途只有一个：<b>把"owner 整体被人改写"这件事变成时间线上的一行</b>。
+/// 2026-09-25 的分歧 <c>#110</c> 里，两端的分布从本局第一个校验点就已经互为镜像，
+/// 却没有对应的"归属改写"日志（那次改写走的是牌堆重建，见 <see cref="OwnerWriteProbe" />），
+/// 于是只能靠翻整份 log 才知道它没变过。有了这一行，下一份 log 直接看"哪一跳变了、变化前长什么样"。
+/// 它<b>只打印、不改状态</b>；真正的修复是 <c>SharedDeckOwnership.RepairCurrent</c> 在
+/// "读档 / 配对激活 / 开战"三个确定性时机上做的。
+/// </remarks>
+internal static class OwnerDriftWatch
+{
+    private static string? _last;
+
+    /// <summary>每个校验点比一次（含指纹，顺序变了也算变）。</summary>
+    public static void OnCheckpoint(uint id, string context, Player anchor)
+    {
+        try
+        {
+            if (anchor.Deck is not { } deck)
+            {
+                return;
+            }
+
+            var signature = SharedDeckOwnership.DistributionOf(deck)
+                            + "|" + DeterministicCardOrder.Fingerprint(deck.Cards);
+
+            if (signature == _last)
+            {
+                return;
+            }
+
+            var previous = _last;
+            _last = signature;
+
+            if (previous is null)
+            {
+                // 基线一行：只在开了逐条取证时要（它本身不是信号，只是"监视器活着"的证明）。
+                DriftLog.Info("drift.watch", $"共享卡组分布基线（chk={id}）：{signature}");
+                return;
+            }
+
+            // ★ 这一行默认可见：它是"整副卡组被人改写"的**唯一默认信号**，不该被静默掉。
+            CappedLog.Info(
+                "drift.watch",
+                $"共享卡组分布变化（chk={id} ctx={context}）：{previous} → {signature}");
+        }
+        catch (Exception)
+        {
+            // 监视失败绝不能影响校验和流程。
+        }
     }
 }
 

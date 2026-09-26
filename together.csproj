@@ -60,6 +60,9 @@
         <!-- 对外接口说明也一起发到 mods 目录：依赖方在这里就能看到接口与变更记录 -->
         <Copy SourceFiles="$(MSBuildProjectDirectory)\API使用说明.md" DestinationFolder="$(ModOutputDir)"
               Condition="Exists('$(MSBuildProjectDirectory)\API使用说明.md')" />
+        <!-- 面向玩家的 README（玩法 / 设置 / 怎么反馈）也一起发：mods 目录里就能直接看到 -->
+        <Copy SourceFiles="$(MSBuildProjectDirectory)\README.md" DestinationFolder="$(ModOutputDir)"
+              Condition="Exists('$(MSBuildProjectDirectory)\README.md')" />
         <!-- 架构说明是它的配套（分层 / 补丁清单 / 内部机制），一起发 -->
         <Copy SourceFiles="$(MSBuildProjectDirectory)\ARCHITECTURE.md" DestinationFolder="$(ModOutputDir)"
               Condition="Exists('$(MSBuildProjectDirectory)\ARCHITECTURE.md')" />

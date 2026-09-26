@@ -441,16 +441,14 @@ internal static class PowerMirror
         {
             foreach (var other in owner.OthersOrEmpty())
             {
-                // 非 Instanced 的能力在同一个 creature 上只能有一份（本体在 PowerCmd.Apply 里先做
-                // FindExistingInstanceForStacking，第二份走"改层数"）。我们绕过了那条路，所以这里自己判：
-                // 目标已经有同一份就**不再添加** —— 层数由 OnPowerAmountChanged 的既有收口同步。
-                // 不判的后果是本体直抛 `Trying to add multiple instances of a non-instanced power to a creature.`
-                // （实测：拦截的 InterceptPower 就是这样把整次出牌打断的。）
-                if (power.InstanceType != PowerInstanceType.Instanced && other.GetPower(power.Id) is not null)
+                // 要不要在目标身上**新增一份副本** —— 严格照本体的叠层语义（PowerCmd.FindExistingInstanceForStacking）：
+                //   None                → 有同 Id 就叠层（不新增；层数由 OnPowerAmountChanged 的既有收口同步）
+                //   Instanced           → 每次施加都是新实例（同一份原件只镜像一次）
+                //   InstancedPerApplier → 同 applier 叠层、**不同 applier 各一份**
+                // 少了这条分支判断的后果：要么本体直抛 `Trying to add multiple instances of a non-instanced power…`
+                // （实测：拦截的 InterceptPower 把整次出牌打断过），要么 InstancedPerApplier 的"第二个施加者"永远少一份。
+                if (!NeedsNewInstanceOn(other, power))
                 {
-                    CappedLog.Info(
-                        "power.mirror.skip",
-                        $"{power.GetType().Name} 在 netId{other.Player?.NetId} 上已有一份（非 Instanced）→ 跳过添加，层数由既有收口同步");
                     continue;
                 }
 
@@ -470,9 +468,11 @@ internal static class PowerMirror
 
                 // L1：身份对齐。本体的 `Applier` / `Target` 是在 PowerCmd.Apply 里设的，而我们绕过它直接 ApplyInternal
                 // → 这两个只能自己补（否则副本不知道自己是谁施加的、指向谁，日志/判据都会错）。
-                // L4-ii：**关系型**（"我施加给队友"，Owner != Applier）的副本要从"另一方视角"复述这段关系 ——
-                // Applier 换成原件宿主，于是拦截那类能力在两边各自成立（原件：我掩护你；副本：你掩护我）。
-                var relational = power.Applier is { } applier && !ReferenceEquals(applier, owner);
+                // L4-ii：**关系型**（"我施加给队友"，Owner != Applier）的副本从"另一方视角"复述这段关系：
+                // 原件是 `applier=P1 → owner=P2`，副本就是 `applier=P2 → owner=P1`（双向对称）。
+                // 典型：灵魂绑定（原件：P1 生成 Soul 时给 P2 加一张；副本：P2 生成 Soul 时给 P1 加一张）、
+                // 拦截（原件在被掩护者身上、Applier=掩护者；副本反过来）。
+                var relational = power.Applier is { } applier2 && !ReferenceEquals(applier2, owner);
                 clone.Applier = relational ? owner : power.Applier;
                 clone.Target = ReferenceEquals(power.Target, owner)
                     ? other
@@ -493,13 +493,18 @@ internal static class PowerMirror
                 clone.SkipNextDurationTick = power.SkipNextDurationTick
                                              || (other.Side == CombatSide.Player && power.Type == PowerType.Debuff);
 
-                // L3-b：**关系型**副本要补跑一次 AfterApplied —— 因为它的衍生施加（拦截的 CoveredPower→InterceptPower）
-                // 被"无来源的跨成员施加不镜像"那条守卫拦住了，只能由副本自己建。
+                // L3-b：**关系型**副本要补跑一次 AfterApplied —— 它得用"翻转后的视角"把那边的关系建起来
+                // （拦截：原件在 P1 上建 InterceptPower 覆盖 P2；副本就在 P2 上建一份覆盖 P1）。
                 // 非关系型不重放：它们的衍生能力由正常镜像机制送过去，再重放就是一边双份（FlexPotion 那类）。
                 if (relational)
                 {
                     ScheduleReplay(clone);
                 }
+
+                CappedLog.Info(
+                    "power.mirror",
+                    $"{power.GetType().Name} 镜像：原件 netId{owner.Player?.NetId} → 副本 netId{other.Player?.NetId}"
+                    + $"（{power.InstanceType}，层数={power.Amount}，applier=netId{power.Applier?.Player?.NetId}）");
             }
 
             // 记一笔，供"同一个效果打到组里其他人"的判定使用。
@@ -512,10 +517,10 @@ internal static class PowerMirror
         }
     }
 
-    /// <summary>让镜像副本补跑一次"施加流程"（异步，失败只记日志）。</summary>
+    /// <summary>让关系型镜像副本补跑一次"施加流程"（异步，失败只记日志）。</summary>
     /// <remarks>
     /// <b>为什么不能直接在钩子里 await</b>：我们挂在 <c>Creature.ApplyPowerInternal</c> 的同步后缀上，拿不到异步上下文；
-    /// 而且本体的副本重放本来就要等原件这一轮施加走完（<c>PowerCmd.Apply</c> 是 async 的）。
+    /// 而且本体的那份施加本来就要等原件这一轮走完（<c>PowerCmd.Apply</c> 是 async 的）。
     /// <b>为什么不广播 Hook</b>：广播会让"这份能力被施加了"在战斗里被算两次（怪、遗物、别的 mod 都会多响应一次），
     /// 而副本需要的只是<b>能力自己</b>的初始化/收尾。
     /// <b>为什么只重放 <c>AfterApplied</c></b>：<c>BeforeApplied</c> 里做的事大多是"给自己加一份别的能力"
@@ -604,6 +609,65 @@ internal static class PowerMirror
         {
             _mirrorDepth--;
         }
+    }
+
+    /// <summary>
+    /// 在 <paramref name="target" /> 上要不要<b>新增一份</b> <paramref name="power" /> 的镜像副本？
+    /// </summary>
+    /// <remarks>
+    /// 严格照本体的叠层语义（<c>PowerCmd.FindExistingInstanceForStacking</c>）：
+    /// <list type="bullet">
+    /// <item><c>None</c>：目标有同 Id 就叠在上面 → <b>不新增</b>（层数由 <see cref="OnPowerAmountChanged" /> 同步）；</item>
+    /// <item><c>Instanced</c>：每次施加都是新实例 → 只要"这份原件"还没镜像过就新增；</item>
+    /// <item><c>InstancedPerApplier</c>：同 applier 叠层、<b>不同 applier 各一份</b> → 目标上既没有这份原件的副本、
+    /// 也没有"同 applier 的同类型实例"时才新增。</item>
+    /// </list>
+    /// 早先那版只写"不是 Instanced 且已有同 Id 就跳过"，把 <c>InstancedPerApplier</c> 当成 <c>None</c>：
+    /// 第二个施加者的那一份永远建不出来（本体那边可是新建了实例的）→ 两端各自少一份、层数/移除配对也跟着错。
+    /// </remarks>
+    private static bool NeedsNewInstanceOn(Creature target, PowerModel power)
+    {
+        var needs = power.InstanceType switch
+        {
+            PowerInstanceType.Instanced => !HasCounterpartFor(target, power),
+            PowerInstanceType.InstancedPerApplier =>
+                !HasCounterpartFor(target, power) && !HasSameApplierInstance(target, power),
+            _ => target.GetPower(power.Id) is null,
+        };
+
+        CappedLog.Info(
+            "power.instance",
+            $"{power.GetType().Name}（{power.InstanceType}）→ netId{target.Player?.NetId} "
+            + $"{(needs ? "新增副本" : "叠在已有那份上（不新增）")}"
+            + $"，applier=netId{power.Applier?.Player?.NetId}");
+
+        return needs;
+    }
+
+    /// <summary>目标身上是否已经有"<b>这份原件</b>"的镜像副本（用副本→原件表反查）。</summary>
+    private static bool HasCounterpartFor(Creature target, PowerModel source)
+    {
+        foreach (var pair in MirrorSources)
+        {
+            if (ReferenceEquals(pair.Value, source) && ReferenceEquals(pair.Key.Owner, target))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>目标身上是否已有"同类型 + 同施加者"的那一份（<c>InstancedPerApplier</c> 的叠层判据）。</summary>
+    /// <remarks>只用于<b>非关系型</b>：关系型副本的 <c>Applier</c> 会被复述改写，两边视角不同名，按它比会误判。</remarks>
+    private static bool HasSameApplierInstance(Creature target, PowerModel power)
+    {
+        if (power.Applier is not { } applier)
+        {
+            return false;
+        }
+
+        return target.GetPowerInstances(power.Id).Any(candidate => ReferenceEquals(candidate.Applier, applier));
     }
 
     internal static void OnPowerAmountChanged(Creature owner, PowerModel power, bool silent)

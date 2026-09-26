@@ -12,21 +12,57 @@ namespace Together.Core.Diagnostics;
 /// </remarks>
 internal static class CappedLog
 {
-    /// <summary>每个键最多打多少条。</summary>
+    /// <summary>普通键的上限。</summary>
+    /// <remarks>高频键（逐张牌的事件之类）不走这里。</remarks>
+    private const int DefaultLimit = 120;
+
+    /// <summary>"关键证据类"键的上限。</summary>
     /// <remarks>
-    /// 排查房间流程时 30 条很容易在长局里被打满（实测"奖励屏：取走了一项奖励"很早就到上限，
-    /// 导致后半段没有证据可看），所以放到 120。真正高频的键（比如逐张牌的事件）不走这里。
+    /// 排查 <c>checksum</c> 分歧时，这些行就是唯一证据 —— 120 条在长局里很容易被打满
+    /// （实测 <c>owner.widen</c> 在分歧发生前就满了，导致 chk=62 前后一条证据都没有）。
+    /// 这些键每秒最多也就几条，放到 2000 既够用又不会淹没日志。
     /// </remarks>
-    private const int Limit = 120;
+    private const int EvidenceLimit = 2000;
+
+    /// <summary>关键证据类键的前缀。</summary>
+    private static readonly string[] EvidenceKeyPrefixes =
+    [
+        "steal.",   // 草蜢偷牌（改判归属 / 显示）
+        "power.",   // 能力镜像（instance/mirror/relational/once/payload/second_hit）
+        "owner.",   // 归属放宽（owner.widen）
+        "own.",     // owner 归一 / 进手牌对齐 / owner.skip / widen
+        "order.",   // 顺序指纹
+        "event.",   // 事件并发守卫 / 注册
+        "compat.",  // 兼容层结论
+        "coop.",    // 名单 / 大厅
+        "arm.",     // 配对激活
+        "rf.",      // 随机数预测联动
+        "drift.",   // 归属写入取证（AddCard / 卡组堆增删 / 分布变化）
+    ];
+
+    private static int LimitOf(string key)
+    {
+        foreach (var prefix in EvidenceKeyPrefixes)
+        {
+            if (key.StartsWith(prefix, StringComparison.Ordinal))
+            {
+                return EvidenceLimit;
+            }
+        }
+
+        return DefaultLimit;
+    }
 
     private static readonly Dictionary<string, int> Counts = [];
 
     public static void Info(string key, string message)
     {
+        var limit = LimitOf(key);
+
         lock (Counts)
         {
             var count = Counts.TryGetValue(key, out var current) ? current : 0;
-            if (count >= Limit)
+            if (count >= limit)
             {
                 return;
             }
@@ -36,7 +72,7 @@ internal static class CappedLog
             // 带上"当前是第几个校验和"：两端自动对账时，同一 chk 下的这些诊断就能一一对上。
             Log.Info(
                 $"[together] {SelfCheck.Tag(message)}"
-                + $"{(count + 1 == Limit ? "（后续同类日志已省略）" : string.Empty)}");
+                + $"{(count + 1 == limit ? "（后续同类日志已省略）" : string.Empty)}");
         }
     }
 }

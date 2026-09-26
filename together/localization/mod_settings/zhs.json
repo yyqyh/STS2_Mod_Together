@@ -36,5 +36,15 @@
   "together.settings.compat.imbued.description": "开启：同一张注能牌在本场战斗里只自动打出一次（按对象引用去重）。\n关闭：本体照常逐玩家派发（注能可能自动打出两次，第二次常卡在选择界面）。",
   "together.settings.compat.randomforeseer.label": "随机数预测联动（RandomForeseer）",
   "together.settings.compat.randomforeseer.description": "开启：装了「随机数预测」时，让它每次预测只建一份共享牌堆 / 球队列副本 —— 修掉「抽牌预测连续都是第一张牌」和「充能球伤害预测不准」。\n关闭：完全不碰对方的预测内核（预测退回它原本的算法）。\n没装那个 mod 时这项没有任何效果。",
-  "together.settings.compat.note": "这一组默认全开。它们改的是本体自己也会走的路径，所以只在「与某个 mod 冲突」时逐条关掉回退。\n联机时以主机设置为准（否则一端关一端开会直接分叉）。"
+  "together.settings.compat.note": "这一组默认全开。它们改的是本体自己也会走的路径，所以只在「与某个 mod 冲突」时逐条关掉回退。\n联机时以主机设置为准（否则一端关一端开会直接分叉）。",
+  "together.settings.diag.title": "诊断 / 反馈",
+  "together.settings.diag.export.label": "导出当前环境（mod 列表 / 设置 / 会话状态）",
+  "together.settings.diag.export.button": "一键导出",
+  "together.settings.diag.export.description": "把「当前启用的 mod 列表 + 本机生效设置 + 本局会话状态」写成一个 txt，放进游戏的日志目录（和 godot.log 同一个文件夹）：together-modlist.txt。\n点完会自动打开那个文件夹。反馈问题时把它和 godot.log 一起发过来就够了。\n这条按钮在战斗中暂停界面也能点（其他设置项在局内是只读的）。",
+  "together.settings.diag.note": "导出内容全部来自公开接口（本体的 mod 加载顺序 + RitsuLib 的 mod 清单），同时会以 [together][env] 前缀写进 log —— 只会复制 log 的话，现场也一样在里面。",
+  "together.settings.diag.test.label": "测试异常弹窗（确认「自动导出 + 弹窗」这条链路）",
+  "together.settings.diag.test.button": "测试一下",
+  "together.settings.diag.test.description": "点一下会：① 立刻生成反馈包（环境快照 + 复制好 godot.log）；② 弹一个和真出 bug 时一模一样的窗；③ 窗里的「打开反馈文件夹」直接定位到那个文件夹。\n如果此刻已经有别的弹窗（比如分歧诊断面板）占着，就只导出、不弹窗 —— 和真实情况的行为一致。",
+  "together.settings.diag.alertpopup.label": "自检到异常时弹窗提醒（本机设置）",
+  "together.settings.diag.alertpopup.description": "开启（默认）：检测到「两端不同步 / 我们自己的断言失败 / 补丁没装全」时弹一个窗，告诉你该发哪两个文件。\n关闭：不弹窗 —— 但反馈包**照旧自动生成**、log 里**照旧**有「⚠ 自检异常（…）｜反馈包：…」那一行，只是不打扰你。\n这是**每台机器自己**的设置（不跟主机同步）：主机关掉不会让客户端也不弹，反之亦然。"
 }

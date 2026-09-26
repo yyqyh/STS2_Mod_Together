@@ -104,6 +104,7 @@ Core/Foundation ► Settings
 | 收口对象 | 机制 | 关键决策 |
 |---|---|---|
 | **卡牌归属** | 共享堆里的牌保留**自然归属**（"这张牌属于谁"）；只有"进手牌"那一刻把 owner 对齐到手牌主人；本体的"同批 owner 必须一致"校验由 transpiler 打掉 | 归一（把共享堆里的牌统一改成锚点）会连带毁掉"我的牌"判据（金纸/卡戎之灰/探戈…），所以撤掉了 |
+| **卡组归属的"记忆"**（2026-09-26） | 按 **Deck 顺序**把 owner 记进 run 槽位 `shared_deck_owners`（`{RulesVersion, 指纹, netId[]}`，随 run snapshot / 存档同步）；读档重建 / 配对激活 / **开战前** / **每个 `chk=` 之前**按它**还原**，表不可用才全钉锚点（两端同一规则）。全 mod 的 owner 写入收口到 `SharedDeckOwnership.SetOwner / MoveTo`；变牌前再把替换卡对齐到原卡 | 本体 `SerializableCard` **不带 owner** → 牌堆重建时 owner = "重建者"；实测重建者是 **`CombatStateSynchronizer`**（每次房间切换"清卡组 + 逐张 `LoadCard`"）。共享卡组下两端会重建成不同的人（整副互为镜像）。后果：`CardCmd.Transform` 的"替换卡必须同 owner"校验**只有一端通过**，另一端抛异常 → 那张牌卡在 Play 区、后续效果整段不跑（分歧 `#110`） |
 | **从共享堆回手** | 搬运之前先把这批牌改成"当前正在结算效果的那名玩家"，本体随后用 owner 推出的目标手牌就是他自己那口 | 目标手牌是本体用 `cards[0].Owner` 推的，共享堆里 owner 不等于"正在操作的人" |
 | **监听表去重** | `CombatState` / `RunState` 的 `IterateHookListeners` 两个源头都按**引用**去重 | 共享牌堆/共享主卡组会让同一张牌被收集两次（注能被自动打出两次、第二次还会卡住战斗循环）；按 Id 去重会误伤同名牌 |
 | **怪招作用域** | 怪物执行招式期间开作用域，让**回声那一侧**的"共享卡牌视图"返回空 | 共享卡组下两位成员的 `AllCards` 指向同一批牌，而怪招按 target 逐个跑 → 同一批牌被处理 N 次（沙漏凋萎升级就是这么坏的）；**不折叠目标** |
@@ -125,9 +126,12 @@ Core/Foundation ► Settings
 |---|---|
 | `RoomFlowDiag` + `HangWatchdog` | 房间流程里程碑日志；黑屏探针 + 自愈（转场遮罩卡在黑色时强制淡回） |
 | `SharedStateSelfCheck` | 校验和生成点把两端状态打出来（共享局默认开，`TOGETHER_SELFCHECK=0` 可静音） |
+| `OwnerWriteProbe` + `OwnerDriftWatch` + `DriftLog` | owner 漂移取证：`drift.addcard`（`RunState.AddCard`/`RemoveCard` 的硬写）、`drift.deck`（卡组那口堆的增 / 删 / 清空）、`drift.watch`（每个 `chk=` 点比一次"分布 + 指纹"）。**只写日志、不改状态**，排查完可整块删。<br>**分级**：逐条明细（`drift.addcard` / `drift.deck` / `own.assign` / `own.slots` / `drift.watch` 基线）默认静默，环境变量 **`TOGETHER_DRIFT=1`** 才输出；默认可见的只有"信号"那几行 —— `drift.watch` 的**分布变化**、`own.repair` 的还原/钉锚点、`own.transform` 的变牌对齐、`own.deck` 的重建后分布 |
+| `ModListExport`（无 `[HarmonyPatch]`） | **一键导出当前环境**：设置页「诊断 / 反馈 → 一键导出」把"启用的 mod 列表（本体加载顺序）+ 检测到的全部条目（含未加载/失败/禁用，来自 RitsuLib 的 `RitsuModManager.GetKnownMods()`）+ 本机生效设置 + 会话状态（netId / 房主或客户端 / 合作组 / 本局种子 / `TOGETHER_DRIFT`）"写成 `<日志目录>\together-modlist.txt`，并 `OS.ShellShowInFileManager` 打开该目录；全文同时以 `[together][env]` 前缀进 log。<br>**注意**：设置页的"局内只读"挂在**小节**上（`compat` / `symbiosis`），不是页面 —— 就是为了让这一节在**战斗中暂停界面**也能点 |
+| `TogetherAlert` + `ChecksumDivergenceAlertPatch` | **自检异常自动出包 + 弹窗**：`Notify(kind, detail)` 一律**先生成反馈包**（`ModListExport.ExportBundle` → `logs\together-feedback\`：`godot.log` + `together-modlist.txt` + 最新分歧包 + 说明文件；不依赖玩家操作），再**按本机偏好**决定是否弹窗，弹的是本体的 `NErrorPopup`（加到 `NModalContainer`）：正文分「出问题时要用的文件」与「**要不要反馈、发到哪里由你自己决定**」两段，按钮只有一个「打开文件夹」（占"是"格；**不给任何一键跳转入口，也不放仓库链接** —— 反馈完全交给玩家）。**共存规则**：`NModalContainer.OpenModal != null`（多半是 RitsuLib 的分歧面板）时不弹、只出包；**限流** 3 次/会话 + 间隔 30 秒。触发点：① 本体公开事件 `ChecksumTracker.StateDiverged`（构造函数 Postfix 订阅）；② owner 槽位表还原抛异常；③ `OwnerClaim` 的"临时视角被覆盖"断言；④ 启动补丁类 `failed > 0`。<br>**开关**：本机偏好 `TogetherUiPrefs.AlertPopup`（另一个数据文件 `together_ui_prefs.json`，key `ui_prefs`，**不进联机同步**）；关掉只影响"弹不弹"，反馈包照旧 |
 | `CappedLog` | 每个键最多 N 条的普通日志（功能取证默认可见，不刷屏） |
 | `TogetherUiText` | 界面文本（设置页 / 选人界面按钮）唯一出口：按游戏语言取中/英。文本在 `together/localization/mod_settings/{eng,zhs}.json`（RitsuLib `I18N`），代码里那份中文是最后回退 |
-| 取证键一览 | `hook.dedupe` / `move.shared_cards` / `power.payload(.field/.skip)` / `power.replay` / `power.mirror(.skip)` / `event.*` / `order.probe` / `gold.*` / `orb.*` / `summon.*` / `steal.*` |
+| 取证键一览 | `hook.dedupe` / `move.shared_cards` / `power.payload(.field/.skip)` / `power.replay` / `power.mirror(.skip)` / `event.*` / `order.probe` / `gold.*` / `orb.*` / `summon.*` / `steal.*` / `own.slots` / `own.repair` / `own.assign` / `own.transform` / `drift.*` |
 
 ---
 
@@ -150,7 +154,7 @@ Core/Foundation ► Settings
 | `SharedStateSelfCheck` 的 `ChecksumSelfCheckPatch` | 只读（打点） | 低 |
 | `MonsterMoveScope.SharedCardViewScopePatch` | 让回声的 `PlayerCombatState.AllCards` 返回空 | 中：任何读 `AllCards` 做统计的 mod（只在怪招期间 + 只在回声侧） |
 | `DeterministicCardComparePatch` | 让 `CardModel.CompareTo` 成为**全序** | 中：所有排序/洗牌路径都受影响（本体自己的 `List.Sort` 排的是副本） |
-| `ImbuedOncePerCombatPatch` / `MirroredPowerSingleFirePatch` | **跳过**本体的自动打出 / 回合末结算（前缀返回 false + 自己把 Task 还回去） | 中：改的是本体阶段执行；两条都带独立开关。~~`ExtraTurnPolicyPatches`~~ 已删：它拦的 `ClearBlock` 是本体正常行为；~~`AutoPrePlayOncePerGroupPatch`~~ 已删：**跳过回声那次 pre-play 派发会分叉**（牌的 owner 两端会漂，见下） |
+| `ImbuedOncePerCombatPatch` / `MirroredPowerSingleFirePatch`（+ `PowerOnceHookTargets` / `PowerOnceHookInstaller`） | **跳过**本体的自动打出 / 回合族钩子（前缀返回 false + 自己把 Task 还回去） | 中：改的是本体阶段执行；两条都带独立开关。`MirroredPowerSingleFirePatch` 除了 6 个基线能力，还会由 `PowerOnceHookTargets` 按**结构判据**把"重写了回合族钩子且钩子里调了效果类命令"的能力一并收口成"效果只算原件一次"（扫描按程序集 MVID 记账、只扫没扫过的；后加载的 mod 由 `PowerOnceHookInstaller` 增量补挂）。~~`ExtraTurnPolicyPatches`~~ 已删：它拦的 `ClearBlock` 是本体正常行为；~~`AutoPrePlayOncePerGroupPatch`~~ 已删：**跳过回声那次 pre-play 派发会分叉**（牌的 owner 两端会漂，见下） |
 | `PowerSecondHitApplyPatch` / `PowerSecondHitModifyAmountPatch` | 把"同一效果的第二次命中"整个忽略（判据 = 同一个 `choiceContext`） | 中：改本体结算 |
 | `EnchantApplyGuardPatch` / `RemoveFromDeckGuardPatch` / `TransformGuardPatch` | 把"已失效的选择"**过滤掉**而不是抛异常 —— 但**只对属于共享卡组的牌**（`SharedDeckRegistry` 判），不是共享卡的照本体抛异常 | 低中：改本体的错误路径（收益是共享局的并发事件不再卡死；别的 mod 拿异常当控制流的逻辑不受影响） |
 | `CardPileLookupPatch` | `CardModel.get_Pile` 找不到时**先查我们的入/出堆索引**，索引没有才去另一半的堆再找 | 中：改本体查询语义 |
@@ -195,6 +199,8 @@ Core/Foundation ► Settings
 | `CharacterSelectPatches` / `CharacterSelectUnreadyPatches` | 选人界面 4 个方法 + 本体"取消准备" | 装「加入合作模式」按钮、跟随换人刷新；按下 = 登记 + 反射调本体 `OnEmbarkPressed`（= 确认准备），再按 = 取消登记 + `OnUnreadyPressed`。**没有起程门控**（开局交给本体 ready 流程） |
 | `HostStartSettingsSyncPatch` / `HostPeerReadySettingsSyncPatch` / `ClientResetSettingsSyncPatch` | 主机开服 / 对端就绪 / 客户端连接与断开 | 设置与成员名单的 sidecar 广播与清理 |
 | `RoomFlowDiagPatches` | 房间里程碑 8 个方法 | 只看不改的日志 + 两处拉起看门狗 |
+| `ExhaustPathProbePatch` | `CardCmd.Exhaust` 前后缀 | 「消耗一张牌」这条链的取证：牌 / owner / 当前堆（类型+实例 id+张数）/ 目标消耗堆 / 结束时是否抛异常。**async 的收尾要挂 `Task` 续延**：Harmony 的 Postfix 只在第一个返回点跑一次（那时 Task 还没完成），实测一半调用根本没有 end 行。起因：客户端打出「余烬」后那张牌**离开手牌却没进消耗堆且无报错** |
+| `CappedLog` 分档 | —— | 「关键证据类」键（`steal.` / `power.` / `owner.` / `own.` / `order.` / `event.` / `compat.` / `coop.` / `arm.` / `rf.`）上限 2000，其余仍是 120 —— 实测 120 会在分歧发生前就被打满（`owner.widen` 满、`power.once` 列入清单被截断），导致关键时刻没有证据 |
 | `ChecksumSelfCheckPatch` | `ChecksumTracker.GenerateChecksum` | 校验和前的自检输出 |
 
 ### L1 共享域（`Core/Shared/{Deck,Body,Power,Orb,Pet,Gold}/`）
@@ -218,6 +224,10 @@ Core/Foundation ► Settings
 | `CardOwnerSinglePatch` | `CardPileCmd.Add(card, pile, …)` | 进堆时归手牌主人 |
 | `HandOwnershipInvariantPatch` | `CardPile.AddInternal` | 进手牌原地对齐 owner |
 | `DifferentOwnersCheckPatch` | `CardPileCmd+<Add>d__N.MoveNext`（transpiler） | 打掉本体"同批 owner 必须一致"校验 |
+| `SharedDeckOwnerNormalizePatch` | `RunState.FromSerializable`（Postfix） | 重建后**按槽位表还原**共享卡组每张牌的 owner（表不可用 → 全钉锚点 + 重记表），并顺手登记 `SharedDeckRegistry` |
+| `CheckpointOwnerRepairPatch` | `ChecksumTracker.GenerateChecksum(string, GameAction)`（Prefix） | **每个 sync 点（`chk=`）之前**按槽位表把共享卡组的 owner 修回来。起因：本体 `CombatStateSynchronizer` **每次房间切换**都"清空卡组 + 逐张 `LoadCard(card, owner)` 重建"，owner 被硬写成 sync 来源那名玩家（实测 `chk=54 ctx=Exiting event room` 分布 `1:31,回声:1 → 回声:32`）。只动 owner，不动内容与顺序 |
+| `TransformOwnerAlignPatch` | `CardTransformation.GetReplacement` | 变牌前把替换卡的 owner **对齐到原卡**：本体所有变牌路径（单张 / 批量 / `TransformTo<T>` / `TransformToRandom`）都汇聚到这里取替换卡，挂这一处全覆盖；此时替换卡还没进牌堆，不留幽灵卡 |
+| `RunStateAddCardProbePatch` / `RunStateRemoveCardProbePatch` / `DeckPileAddProbePatch` / `DeckPileRemoveProbePatch` / `DeckPileClearProbePatch` | `RunState.AddCard` / `RemoveCard` + 卡组那口堆的 `AddInternal` / `RemoveInternal` / `Clear` | **只写日志、不改行为**（`drift.addcard` / `drift.deck`）：牌"进 / 出 run 状态"走的硬写是 `card.Owner = owner`（不是 `GiveToAnotherPlayer`，老探针抓不到）；整副卡组被换掉时会留下"26 增 26 删"的痕迹。排查完可整块删掉 `Core/Diagnostics/OwnerWriteProbe.cs` |
 | `HandReturnPatches` | `CardPileCmd.Add` 三个重载 | "从共享堆回手"的落点/归属修正 |
 | `SelectedFromPilePatch` | `CardSelectCmd.FromCombatPile` | 记"谁从哪口堆选牌" |
 | `CardPileLookupPatch` | `CardModel.get_Pile` | 找不到时先查 `CardPileIndex`（`AddInternal`/`RemoveInternal` 维护的 O(1) 映射 + 复核），再退回"扫其他成员的堆"（安全网） |
@@ -228,6 +238,7 @@ Core/Foundation ► Settings
 | `InitialShuffleProbePatch` | `CardPile.RandomizeOrderInternal` | 初始洗牌后打指纹（不排序） |
 | `AscensionBaneDedupePatch` | `AscensionManager.ApplyEffectsTo`（Prefix+Postfix） | 调用前后作差，只摘回声那次调用新加的"进阶之灾"；读档兜底仍走 `DedupeSharedDeck` |
 | `OwnerClaim` 系列（`SharedCardExhausted` / `SharedCardDiscarded` / `SharedCardPlayed` / `SharedCardDrawn` / `SharedCardGenerated` / `SharedBeforeCardRemoved` / `SharedDamageReceived` 七个 `*OwnerWidenPatch`） | `Hook.AfterCardExhausted` / `AfterCardDiscarded` / `AfterCardPlayed`（两轮）/ `AfterCardDrawn`（两轮）/ `AfterCardGeneratedForCombat` / `BeforeCardRemoved` / `AfterDamageReceived`（两轮，判据是 `cardSource.Owner`） | 「我的牌」判据的组内放宽：**逐监听者**调用，只有"方法体里读了 `card.Owner`"的才临时看到"自己的牌"；不读 owner 的（成就、鼓、午夜这类）原样不动、不会被重复触发。**判据要扫 async 状态机**：本体钩子多是 `async Task`，方法自己只剩"建状态机 + Start"，必须取 `AsyncStateMachineAttribute.StateMachineType.MoveNext` 再扫 `CardModel.get_Owner`（只扫外层会一个都扫不到——实测 `owner.widen` 全是 0）。监听者来源、Push/Pop、收尾顺序都照抄本体各自那一份（伤害钩子是"先 PopModel 再 InvokeExecutionFinished"）。全部挂在 `CompatHookWiden` 开关下 |
+| `PowerOnceHookTargets`（(B) 判据）的**门③** | —— | "钩子里有没有调效果类命令"要**顺着调用链往下看 3 层**（只跟本类型/基类里定义的方法）：这类能力的钩子体往往只有 `FireAll(...)`/`FireOne(...)`，真正的 `CardCmd` 在更深一层——只看最外层会漏（实测幻术师 `MirrorImagePower.AfterPlayerTurnStartLate` 就是这么漏的）。判据改动后 `RulesVersion + 1`，缓存整份作废重扫 |
 | `HookListenerDedupePatches` | `CombatState`/`RunState.IterateHookListeners` | 只去掉"同一张牌（及其附魔/灾祸）被枚举两次"的重复，其余监听者原样保留 |
 | `MonsterMoveScopePatch` / `SharedCardViewScopePatch` | `MonsterModel.PerformMove` / `PlayerCombatState.get_AllCards` | 怪招期间共享卡牌只算一次 |
 | `ImbuedOncePerCombatPatch` | `Imbued.AfterAutoPrePlayPhaseEntered` | 注能每场战斗只自动打出一次（按**牌对象**去重；不能改成按玩家跳过派发，见 §3.9 的"别踩的坑"） |
@@ -261,6 +272,8 @@ Core/Foundation ► Settings
 6. **"只补空"**：同步副本状态时绝不覆盖副本自己写的值。
 7. **补丁逐类安装**；新增补丁用 `[HarmonyPatch]` + `TargetMethods()` 的合并风格（同一关注点一个类）。
 8. **对外只暴露 `TogetherApi`**；内部类型保持 `internal`。
+9. **owner 只能经 `SharedDeckOwnership` 改**（`SetOwner` / `MoveTo`）——别直接 `card.Owner = x`、别直接调 `card.GiveToAnotherPlayer`。卡组 owner 的"真相"是 run 槽位 `shared_deck_owners`（按 Deck 顺序），任何新写的归属逻辑都必须**两端算出同一个结果**；改完顺手 `SharedDeckOwnership.CaptureCurrent("原因")` 记一次槽位。
+10. **变牌不要绕开 `CardTransformation.GetReplacement`**：新加的变牌入口如果自己造替换卡直接进堆，`CardCmd` 那条"替换卡必须同 owner"校验就会在共享局里一端过、一端抛。
 
 ---
 
@@ -331,6 +344,11 @@ together/
     ├── Api/TogetherApi.cs        ★ 对外接口（唯一 public 面）
     ├── Integrations/             L3 联动层（默认不装：[HarmonyPatchCategory] 由安装器按对方的加载时机挂）
     │   └── RandomForeseer/       随机数预测：共享牌堆 / 球位 / 冻眼抽牌堆主人
+    ├── Shared/Power/             L2 能力镜像
+    │   ├── PowerMirror.cs        镜像内核（镜像/移除/层数/内部数据/关系型视角翻转）
+    │   ├── PowerOnceHookTargets.cs   (B) 判据：重写回合族钩子 + 钩子里调效果类命令 → 效果只算原件一次；
+    │   │                             扫描结论按程序集 MVID 缓存到 together_power_once.json（跨启动直接复用，mod 更新即失效）
+    │   └── PowerOnceHookInstaller.cs 启动扫一遍 + 每个 mod 加载后增量扫（进程内按 MVID 记账，扫过的不再扫）
     │
     ├── Foundation/               L0 谁是成员 · 总闸门（一起改，别分开看）
     │   ├── TogetherPair.cs           成员注册表 + IsActive 总闸门 + Arm + 解绑

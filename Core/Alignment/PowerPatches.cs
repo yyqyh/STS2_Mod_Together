@@ -107,9 +107,12 @@ internal static class ImbuedOncePerCombatPatch
 /// 共享身体下每个成员身上各有一份镜像（镜像是必要的：各人算伤害/格挡都要读到同一份数值），
 /// 回合结束时所有成员都是 participants → 每份都扣一次（实测"6 点临时力量，回合结束变成 -6"）。
 /// 判定用 <see cref="PowerMirror.IsMirrorCopy" />：跟着对象走，不受结算顺序影响。
-/// <b>为什么只处理这几个类、不做通用过滤</b>：通用过滤（回合族钩子里丢掉镜像副本）会连带丢掉
-/// "每回合重置的内部计数"，实测杂耍（<c>JugglingPower</c>）的计数整局不重置。以后又发现某个身体类
-/// 回合效果翻倍（例如恶魔形态每回合加力量），往 <see cref="TargetMethods" /> 加一行即可。
+/// <b>下面这 6 个是"基线清单"</b>（实测过、必须收口的）。除此之外还有一条结构判据在跑：
+/// <see cref="Together.Core.Shared.Power.PowerOnceHookTargets" /> 会扫"重写了回合族钩子、且钩子里真的调了
+/// 效果类命令（<c>CardCmd</c>/<c>PowerCmd</c>/<c>Hook</c> 广播…）"的能力，用同一个前缀把它们也挂上 ——
+/// 这样幻术师那类"回合开始开一次火"的 mod 能力不用逐个加名字。
+/// <b>判据里"有没有调效果类命令"这一步不能省</b>：单纯对回合族钩子做通用过滤会连带丢掉"每回合重置的内部计数"，
+/// 实测杂耍（<c>JugglingPower</c>）的计数整局不重置。
 /// 这些是 <c>async</c> 方法：Prefix 返回 false 时必须自己把 <c>Task</c> 还回去，否则调用方 await 会炸。
 /// </remarks>
 [HarmonyPatch]
@@ -126,7 +129,7 @@ internal static class MirroredPowerSingleFirePatch
     }
 
     [HarmonyPrefix]
-    private static bool Prefix(PowerModel __instance, ref Task __result)
+    private static bool Prefix(PowerModel __instance, MethodBase __originalMethod, ref Task __result)
     {
         if (!TogetherPair.IsActive
             || !Together.Core.Settings.TogetherSettingsSync.EffectiveCompatMirroredPowerSingleFire   // ★ 兼容模式开关
@@ -134,6 +137,10 @@ internal static class MirroredPowerSingleFirePatch
         {
             return true;
         }
+
+        CappedLog.Info(
+            "power.once.skip",
+            $"{__instance.GetType().Name}.{__originalMethod.Name} 的镜像副本跳过（效果只算原件一次）");
 
         __result = Task.CompletedTask;
         return false;
@@ -185,7 +192,7 @@ internal static class GeneratedCardHandTargetPatch
                 }
 
                 var from = card.Owner;
-                card.GiveToAnotherPlayer(creator);
+                SharedDeckOwnership.SetOwner(card, creator, "generated_card_hand_target");
                 CappedLog.Info(
                     "gen_card.retarget",
                     $"生成牌落点改判：{DeterministicCardOrder.DescribeCards([card], 1)}"

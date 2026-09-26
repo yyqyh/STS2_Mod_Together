@@ -251,7 +251,22 @@ internal static class OwnerClaim
             {
                 if (swapped)
                 {
+                    // 断言：临时换视角期间如果有人（本体 / 别的 mod / 我们自己的另一条路径）改过归属，
+                    // 我们这一句还原会把它**丢掉**。以前这种"丢掉"是静默的 —— 现在留一行证据。
+                    var afterInvoke = OwnerField(card);
                     OwnerField(card) = original;
+
+                    if (!ReferenceEquals(afterInvoke, view))
+                    {
+                        CappedLog.Info(
+                            "drift.widen",
+                            $"{hookName}：{card.Id.Entry} 的临时视角期间 owner 被改成 netId{afterInvoke?.NetId}"
+                            + $"（视角 netId{view?.NetId}、还原成 netId{original?.NetId} → 那次改写已被丢弃）");
+                        TogetherAlert.Notify(
+                            "归属视角被覆盖",
+                            $"{hookName} 派发 {card.Id.Entry} 时，临时视角期间 owner 被改成 netId{afterInvoke?.NetId}，"
+                            + $"还原回 netId{original?.NetId} 时把那次改写丢掉了");
+                    }
                 }
             }
         }

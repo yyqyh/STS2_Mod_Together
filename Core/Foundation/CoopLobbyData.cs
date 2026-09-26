@@ -92,6 +92,10 @@ internal static class CoopLobbyData
                     SyncLobbyOnChange = true,
                     WritePolicy = RunSavedDataWritePolicy.WhenNonDefault,
                 });
+
+            // 共享卡组的 owner 槽位表（按 Deck 顺序的 netId 数组 + 指纹）：随 run snapshot / 存档同步，
+            // 读档重建后按它还原每张牌原本的主人 —— 解决"两端 owner 互为镜像 → 变牌只有一端能过"。
+            Together.Core.Shared.Deck.SharedDeckOwnerSlots.RegisterInto(store);
         }
 
         RitsuLibFramework.SubscribeLifecycle<RunSavedDataLobbyStagingEvent>(OnStagingChanged);

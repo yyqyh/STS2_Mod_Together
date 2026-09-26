@@ -268,6 +268,14 @@ internal static class PopulateCombatStateAnchorOnlyPatch
     {
         LogDeck(__instance);
 
+        // ★ 开战前先修一次共享卡组的 owner：本体紧接着会把主卡组"克隆"成战斗牌堆，
+        // 克隆体继承的是<b>当下</b>的 owner —— 所以修复必须在原方法之前做，不能让镜像态传进战斗。
+        // 时机确定性：两端都是"锚点那一次 PopulateCombatState"走到这里，且都在原方法之前。
+        if (TogetherPair.IsAnchor(__instance))
+        {
+            SharedDeckOwnership.RepairCurrent("combat_start");
+        }
+
         // 球位 / 召唤物的字段替换必须在**赋值之后**做：PlayerCombatState 的构造函数后置补丁跑在
         // `PlayerCombatState = new PlayerCombatState(this)` 这句赋值之前，那时 player.PlayerCombatState 还是 null，
         // 我们根本拿不到要换的那份实例（实测 log：`已有战斗状态 1 人 → 本次归并 0 份`，等于一次都没换成）。

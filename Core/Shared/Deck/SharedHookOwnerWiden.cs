@@ -56,6 +56,14 @@ internal static class SharedHookOwnerWidenPatch
             return true;
         }
 
+        // 卡组"内容变了"的两种形态都会经过这一处：进卡组（牌现在在 Deck）和离开卡组（oldPile 是 Deck）。
+        // 只有这两种情况才重记槽位表 —— 其余牌堆搬运（抽牌 / 弃牌 / 消耗）不该每次都算一遍指纹。
+        // 记账点选在这里的理由：开局填充 / 战斗奖励 / 事件加牌 / 商店买牌 / 移除卡牌全都汇聚到这个钩子。
+        if (oldPile == PileType.Deck || card.Pile?.Type == PileType.Deck)
+        {
+            SharedDeckOwnership.CaptureCurrent(oldPile == PileType.Deck ? "deck_leave" : "deck_entry");
+        }
+
         if (card.Pile?.Type != PileType.Deck)
         {
             return true;
